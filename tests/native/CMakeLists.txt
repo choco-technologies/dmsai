@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.18)
+project(dmsai_native C)
+enable_testing()
+add_executable(dmsai_test test.c ../../src/dmsai.c)
+target_include_directories(dmsai_test PRIVATE stubs ../../include ../../src)
+target_compile_options(dmsai_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+add_test(NAME dmsai_contract COMMAND dmsai_test)
