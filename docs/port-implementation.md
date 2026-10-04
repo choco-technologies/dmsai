@@ -9,6 +9,10 @@ MCLK=256*FS. PLLM, SYSCLK and LCD PLLSAI remain unchanged. Releases the clock
 only after SAI is stopped and gated. The clock/DMA leases persist over stop
 and are released on destroy. A foreign enabled SAI gate is never reset.
 
+SAI2_B uses DMA2 stream7 hardware channel0. The existing dmdma API reserves
+request0 for NONE; its STM32 port masks the selector to three bits, so this
+port supplies the nonzero alias8 to select channel0 without changing that ABI.
+
 DMA is circular, with half/complete IRQ notifications and direct-mode sample
 width. DMA vectors belong exclusively to dmdma; this port registers SAI2
 IRQ91 for FIFO/frame faults. Shutdown disables the SAI IRQ, stops B before

@@ -13,6 +13,9 @@
 #define SAI_DMA (1UL << 17)
 #define SAI_ERRORS ((1UL << 0) | (1UL << 2) | (1UL << 5) | (1UL << 6))
 #define IRQ 91U
+/* dmdma reserves request 0 for NONE; STM32 CHSEL uses request & 7.
+ * Its nonzero alias 8 selects hardware channel 0 for SAI2_B. */
+#define RX_REQUEST 8U
 
 typedef struct
 {
@@ -144,7 +147,7 @@ static int start_dma(dmsai_port_context_t c, unsigned direction, void *buffer, s
     dmdma_data_width_t width = c->config.sample_bits == 16 ? dmdma_data_width_halfword : dmdma_data_width_word;
     dmdma_transfer_config_t transfer = {
         .direction = direction == dmsai_tx ? dmdma_direction_memory_to_peripheral : dmdma_direction_peripheral_to_memory,
-        .request = direction == dmsai_tx ? 3 : 0,
+        .request = direction == dmsai_tx ? 3 : RX_REQUEST,
         .source_address = direction == dmsai_tx ? buffer : (const void *)&BLOCK(direction)->dr,
         .destination_address = direction == dmsai_tx ? (void *)&BLOCK(direction)->dr : buffer,
         .source_width = width, .destination_width = width,
