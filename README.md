@@ -1,98 +1,67 @@
 # dmsai
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![CI](https://github.com/choco-technologies/dmsai/actions/workflows/ci.yml/badge.svg)](https://github.com/choco-technologies/dmsai/actions/workflows/ci.yml)
+SAI transport driver for DMOD. `dmsai` provides an opaque-context Module API;
+`dmsai_port` implements STM32F746 SAI2 A master TX and optional B synchronous
+RX with circular DMA. This first port supports 16/24/32-bit samples and
+configurable active slots. Codec control belongs in a separate driver.
 
-dmsai DMOD application module.
+## Dependencies and build
 
-## Description
+Requires dmdma >= 0.5 and **dmclk >= 1.2 with the SAI clock reservation API**.
+Until dmclk 1.2 is released, build the companion dmclk PR and supply its packaged
+headers explicitly. No dependency source is statically linked into dmsai.
 
-TODO: describe what this module does.
-
-## Building
-
-### Using CMake
-
-```bash
-mkdir -p build
-cd build
-cmake ..
-cmake --build .
+```sh
+cmake -S ../dmclk -B ../dmclk/build-sai -DDMOD_MODULE_VERSION=1.2
+cmake --build ../dmclk/build-sai
+cmake -S . -B build -DDMOD_CPU_FAMILY=stm32f7 \
+  -DDMSAI_DMCLK_INCLUDE_DIR="$PWD/../dmclk/build-sai/packages/dmclk/include"
+cmake --build build
 ```
 
-Pass `-DDMOD_DIR=/path/to/local/dmod` to build against a local dmod checkout
-instead of fetching `develop` from GitHub.
+The local header override does not install the runtime dependency. Bundle the
+matching dmclk/dmclk_port builds in firmware along with dmdma/dmdma_port and
+both dmsai modules. Generated `.dmd` files retain the dmclk >= 1.2 requirement.
+For the SDK itself, normal FetchContent fetches dmod/develop; a local SDK can
+be selected using `-DFETCHCONTENT_SOURCE_DIR_DMOD=/path/to/dmod`.
 
-### Using Make
+## Use
 
-```bash
-make DMOD_MODE=DMOD_MODULE DMOD_DIR=/path/to/dmod
+Configure the SAI pins first (GPIO-only INI supplied in `configs/board/`).
+Call `dmsai_create`, then `dmsai_start` with buffers allocated from the named
+`dmheap` **dma** heap. Refill/consume completed halves on DMA notifications.
+Call `dmsai_stop` before releasing those buffers and `dmsai_destroy` afterwards.
+An RX stream still requires a TX buffer: block A generates the shared clocks.
+Buffers in cached SRAM/SDRAM are rejected by the initial port.
+
+This is a transport Module API, with no `/dev/audio` interface yet. A higher
+layer can combine it with a codec driver and expose PCM file operations.
+It does not initialize WM8994, route analog audio, or select a microphone.
+
+## Tests
+
+```sh
+cmake -S tests/native -B build-native
+cmake --build build-native
+ctest --test-dir build-native --output-on-failure
 ```
 
-## Testing
+These tests exercise the production core against a fake port. They check
+configuration/buffer validation, lifecycle, error propagation, events and
+status. The ARM `dmsai_hardware_test` runs on STM32F746G-DISCO with initialized
+clock and DMA drivers. It checks 44.1/48 kHz, 16/24/32 bits, TX and TX/RX DMA
+progress, stop/restart and resource conflicts. It restores its GPIO settings.
+It neither proves analog sound quality nor validates microphone samples.
 
-Tests are built automatically alongside the module (see `tests/`). Once built,
-run them with `ctest`:
+## Project structure
 
-```bash
-cd build
-ctest --output-on-failure
-```
+- `include/`: public core/port contracts and PCM types
+- `src/dmsai.c`: validation, opaque context, notifications/status
+- `src/port/stm32f7/`: RCC/SAI registers, clock and DMA resource ownership, IRQ
+- `configs/board/stm32f746g-disco/`: GPIO routing
+- `tests/native/`: host contract tests
+- `tests/hardware.c`: physical board transport test
+- `docs/`: API, configuration and port documentation
+- `manifest.dmm`, `*.dmr`: independently packaged core and port modules
 
-`ctest` installs the test module's dependencies with `dmf-get` and then runs
-it through `dmod_loader`. To run it manually instead:
-
-```bash
-export DMOD_DMF_DIR=$(pwd)/build/dmf
-dmf-get install -d ${DMOD_DMF_DIR}/test_dmsai-local.dmd -y
-dmod_loader build/dmf/test_dmsai.dmf
-```
-
-## Usage
-
-<TBD>
-
-This application module can be loaded and executed using the DMOD loader:
-
-```bash
-dmod_loader /path/to/dmsai.dmf
-```
-
-## API
-
-`dmsai` is loaded and executed through the DMOD loader - it does not
-expose a callable module API of its own. See
-[docs/api-reference.md](docs/api-reference.md) for its command-line
-arguments and exit codes.
-
-## Documentation
-
-See the `docs/` directory:
-
-- **[api-reference.md](docs/api-reference.md)** - Command-line usage
-
-View documentation using `dmf-man dmsai`.
-
-## Project Structure
-
-```
-dmsai/
-├── docs/              # Documentation (markdown format)
-├── src/
-│   └── dmsai.c
-├── tests/
-│   ├── CMakeLists.txt
-│   └── dmsai_test.c
-├── CMakeLists.txt
-├── Makefile
-├── dmsai.dmr
-└── manifest.dmm
-```
-
-## Author
-
-Patryk Kubiak
-
-## License
-
-MIT
+MIT; author Patryk Kubiak.

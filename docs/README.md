@@ -1,14 +1,5 @@
-# dmsai Documentation
+# Documentation
 
-Welcome to the dmsai module documentation.
-
-## Contents
-
-- **[api-reference.md](api-reference.md)** - Command-line usage and behavior
-
-View documentation using `dmf-man`:
-
-```bash
-dmf-man dmsai          # Main documentation
-dmf-man dmsai api      # API reference
-```
+- [API](api-reference.md)
+- [Board configuration](configuration.md)
+- [STM32F7 port](port-implementation.md)

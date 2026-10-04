@@ -1,42 +1,36 @@
 name: CI
-
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [main]
   pull_request:
-    branches: [ main, master, develop ]
-
+    branches: [main]
 jobs:
-  build-and-test:
-    name: Build and Test
+  native-contract:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          cmake -S tests/native -B build-native
+          cmake --build build-native
+          ctest --test-dir build-native --output-on-failure
+  stm32f7-modules:
+    runs-on: ubuntu-latest
     container:
       image: chocotechnologies/dmod:1.0.4
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Build dmsai
-        run: |
-          mkdir -p build
-          cd build
-          cmake .. -DDMOD_MODE=DMOD_MODULE
-          cmake --build .
-
-      - name: Verify module files
-        run: |
-          echo "Checking for module files..."
-          ls -lh build/dmf/
+      - uses: actions/checkout@v4
+      # Temporary source dependency until dmclk 1.2 is released.
+      - uses: actions/checkout@v4
+        with:
+          repository: choco-technologies/dmclk
+          ref: 7139bb340c0975037013ea4fa130b269aaba9d3f
+          path: dependencies/dmclk
+      - run: |
+          set -e
+          cmake -S dependencies/dmclk -B build-clock -DDMOD_MODULE_VERSION=1.2
+          cmake --build build-clock --target dmclk dmclk_port
+          cmake -S . -B build -DDMOD_CPU_FAMILY=stm32f7 -DDMSAI_DMCLK_INCLUDE_DIR="$PWD/build-clock/packages/dmclk/include"
+          cmake --build build
           test -f build/dmf/dmsai.dmf
-          test -f build/dmf/dmsai_version.txt
-          test -f build/dmf/test_dmsai.dmf
-          echo "Module files present"
-
-      - name: Run tests with dmod_loader
-        run: |
-          export DMOD_DMF_DIR=$(pwd)/build/dmf
-          dmf-get install -d ${DMOD_DMF_DIR}/test_dmsai-local.dmd -y
-          dmod_loader build/dmf/test_dmsai.dmf
+          test -f build/dmf/dmsai_port.dmf
+          test -f build/dmf/dmsai_hardware_test.dmf
