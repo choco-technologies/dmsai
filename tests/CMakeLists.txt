@@ -8,6 +8,12 @@ dmod_add_test(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     dmsai_test.c
 )
 
+target_include_directories(${DMOD_MODULE_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+
+target_link_libraries(${DMOD_MODULE_NAME} dmsai_if)
+
 # Register the test module with ctest - this replays the same two steps CI
 # runs (see .github/templates/ci.yml.template): install the test module's
 # dependencies with dmf-get, then execute it through dmod_loader. The test's

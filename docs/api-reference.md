@@ -1,13 +1,12 @@
 # dmsai API Reference
 
-Document command-line usage, arguments, and exit codes here.
+Document the module's public types and functions here as you add them to
+`include/dmsai.h`.
 
-## Usage
+## Types
 
-```bash
-dmod_loader dmsai.dmf [args...]
-```
+_(none yet)_
 
-## Arguments
+## Functions
 
 _(none yet)_

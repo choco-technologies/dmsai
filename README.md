@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/choco-technologies/dmsai/actions/workflows/ci.yml/badge.svg)](https://github.com/choco-technologies/dmsai/actions/workflows/ci.yml)
 
-dmsai DMOD application module.
+dmsai DMOD library module.
 
 ## Description
 
@@ -52,32 +52,62 @@ dmod_loader build/dmf/test_dmsai.dmf
 
 <TBD>
 
-This application module can be loaded and executed using the DMOD loader:
+This library module provides functions that can be used by other modules:
 
-```bash
-dmod_loader /path/to/dmsai.dmf
+```c
+#include "dmsai.h"
 ```
 
 ## API
 
-`dmsai` is loaded and executed through the DMOD loader - it does not
-expose a callable module API of its own. See
-[docs/api-reference.md](docs/api-reference.md) for its command-line
-arguments and exit codes.
+| Function | Description |
+|----------|-------------|
+| `dmsai_create()` | Create a new `dmsai_t` instance. |
+| `dmsai_destroy()` | Destroy an instance created by `_create()`. |
+| `dmsai_is_valid()` | Check whether a handle is a valid instance. |
+
+See [include/dmsai.h](include/dmsai.h) for the full
+declarations and [docs/api-reference.md](docs/api-reference.md) for the
+complete reference.
 
 ## Documentation
 
 See the `docs/` directory:
 
-- **[api-reference.md](docs/api-reference.md)** - Command-line usage
+- **[api-reference.md](docs/api-reference.md)** - Complete API documentation
 
 View documentation using `dmf-man dmsai`.
 
+## Hardware Port
+
+This module ships two DMOD modules: the architecture-independent
+`dmsai` and `dmsai_port`, which contains the
+architecture-specific implementation. The active architecture is selected via
+`DMOD_CPU_FAMILY` (default: `stm32f7`):
+
+```bash
+cmake .. -DDMOD_CPU_FAMILY=stm32f7
+```
+
+See [docs/port-implementation.md](docs/port-implementation.md) for how to add
+another architecture. Port-specific files:
+
+```
+├── include/dmsai_port.h
+├── src/port/
+│   ├── CMakeLists.txt
+│   └── stm32f7/
+│       ├── config.cmake
+│       └── port.c
+└── dmsai_port.dmr
+```
 ## Project Structure
 
 ```
 dmsai/
 ├── docs/              # Documentation (markdown format)
+├── include/           # Public headers
+│   └── dmsai.h
 ├── src/
 │   └── dmsai.c
 ├── tests/

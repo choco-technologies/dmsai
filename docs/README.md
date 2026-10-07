@@ -4,7 +4,13 @@ Welcome to the dmsai module documentation.
 
 ## Contents
 
-- **[api-reference.md](api-reference.md)** - Command-line usage and behavior
+- **[api-reference.md](api-reference.md)** - Complete API documentation
+
+## Quick Reference
+
+```c
+#include "dmsai.h"
+```
 
 View documentation using `dmf-man`:
 
