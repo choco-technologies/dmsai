@@ -1,6 +1,6 @@
 # #############################################################################
 # 
-# 	This is an example of a simple application module.
+# 	This is an example of a simple library module.
 #
 # #############################################################################
 DMOD_DIR=@DMOD_DIR@
@@ -30,7 +30,7 @@ DMOD_CSOURCES=src/dmsai.c
 DMOD_CXXSOURCES=
 
 # The list of include directories
-DMOD_INC_DIRS=
+DMOD_INC_DIRS=include
 
 # The list of libraries to link
 DMOD_LIBS=
@@ -44,6 +44,11 @@ DMOD_DEFINITIONS=
 DMOD_MAL_IMPLS=
 
 # -----------------------------------------------------------------------------
+#   List of DIF interfaces implemented by the module
+# -----------------------------------------------------------------------------
+DMOD_DIF_IMPLS=
+
+# -----------------------------------------------------------------------------
 #   Include the dmod app makefile
 # -----------------------------------------------------------------------------
-include $(DMOD_DMF_APP_FILE_PATH)
+include $(DMOD_DMF_LIB_FILE_PATH)
