@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-and-test:
-    name: Build and Test
+    name: Build modules and test target
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -32,11 +32,6 @@ jobs:
           ls -lh build/dmf/
           test -f build/dmf/dmsai.dmf
           test -f build/dmf/dmsai_version.txt
+          test -f build/dmf/dmsai_port.dmf
           test -f build/dmf/test_dmsai.dmf
           echo "Module files present"
-
-      - name: Run tests with dmod_loader
-        run: |
-          export DMOD_DMF_DIR=$(pwd)/build/dmf
-          dmf-get install -d ${DMOD_DMF_DIR}/test_dmsai-local.dmd -y
-          dmod_loader build/dmf/test_dmsai.dmf

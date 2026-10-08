@@ -1,49 +1,15 @@
-# #############################################################################
-# 
-# 	This is an example of a simple application module.
-#
-# #############################################################################
-DMOD_DIR=@DMOD_DIR@
+# Build both independently loadable modules through the shared CMake setup.
+BUILD_DIR ?= build
+DMOD_CPU_FAMILY ?= stm32f7
+CMAKE_ARGS ?=
 
-# -----------------------------------------------------------------------------
-#  Paths initialization
-# -----------------------------------------------------------------------------
-include $(DMOD_DIR)/paths.mk
+.PHONY: all configure clean
 
-# -----------------------------------------------------------------------------
-#   Module configuration
-# -----------------------------------------------------------------------------
+all: configure
+	cmake --build $(BUILD_DIR)
 
-# The name of the module
-DMOD_MODULE_NAME=dmsai
+configure:
+	cmake -S . -B $(BUILD_DIR) -DDMOD_CPU_FAMILY=$(DMOD_CPU_FAMILY) $(CMAKE_ARGS)
 
-# The version of the module
-DMOD_MODULE_VERSION=0.1
-
-# The name of the author
-DMOD_AUTHOR_NAME=Patryk Kubiak
-
-# The list of C sources
-DMOD_CSOURCES=src/dmsai.c
-
-# The list of C++ sources
-DMOD_CXXSOURCES=
-
-# The list of include directories
-DMOD_INC_DIRS=
-
-# The list of libraries to link
-DMOD_LIBS=
-
-# The list of definitions
-DMOD_DEFINITIONS=
-
-# -----------------------------------------------------------------------------
-#   List of MAL interfaces implemented by the module
-# -----------------------------------------------------------------------------
-DMOD_MAL_IMPLS=
-
-# -----------------------------------------------------------------------------
-#   Include the dmod app makefile
-# -----------------------------------------------------------------------------
-include $(DMOD_DMF_APP_FILE_PATH)
+clean:
+	cmake --build $(BUILD_DIR) --target clean

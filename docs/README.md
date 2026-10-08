@@ -4,7 +4,7 @@ Welcome to the dmsai module documentation.
 
 ## Contents
 
-- **[api-reference.md](api-reference.md)** - Command-line usage and behavior
+- **[api-reference.md](api-reference.md)** - Proposed transport and port APIs
 
 View documentation using `dmf-man`:
 
