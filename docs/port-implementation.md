@@ -9,14 +9,15 @@ touching architecture-independent logic.
 1. Create `src/port/<family>/config.cmake`, setting `DMOD_TOOLS_NAME` for the
    target architecture (see `src/port/stm32f7/config.cmake` for the pattern -
    it must match a directory under `dmod/configs/arch/...`).
-2. Create `src/port/<family>/port.c` implementing the
-   `dmod_dmsai_port_api_declaration(...)` functions declared in
-   `include/dmsai_port.h`, plus `dmod_init`/`dmod_deinit` and any
-   `DMOD_IRQ_HANDLER(...)` needed.
-3. If the underlying peripheral IP is identical across families, factor the
-   shared logic into `src/port/<family>_common/` and keep each
-   `src/port/<family>/port.c` a thin wrapper (lifecycle + IRQ only) - see
-   `dmfmc/src/port/stm32_common/` for a real example of this split.
+2. Create `src/port/<family>/port.c` for `dmod_init`/`dmod_deinit` and any
+   `DMOD_IRQ_HANDLER(...)` needed. Implement the functions declared in
+   `include/dmsai_port.h` in a shared source file when the peripheral IP is
+   common to multiple families. For STM32, these entry points are in
+   `src/port/stm32_common/stm32_common.c` and selected by `config.cmake` through
+   `DMSAI_PORT_COMMON_SOURCES`.
+3. Keep `port.c` limited to family-specific lifecycle and interrupt routing.
+   A family with different peripheral IP may provide its own implementations
+   of the port API through `DMSAI_PORT_COMMON_SOURCES`.
 4. Build by selecting the new family:
    `cmake .. -DDMOD_CPU_FAMILY=<family>`.
 5. Do not introduce a module-specific variable (e.g. `<MODULE>_MCU_SERIES`) for

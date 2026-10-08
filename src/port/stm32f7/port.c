@@ -1,29 +1,24 @@
-#define DMOD_ENABLE_REGISTRATION    ON
-#include "dmsai_port.h"
+#define DMOD_ENABLE_REGISTRATION ON
 #include "dmod.h"
 
-/* ---- DMOD lifecycle ---- */
-
-int dmod_init(const Dmod_Config_t *Config)
+/* Family-specific lifecycle and, later, interrupt routing only. */
+/**
+ * @brief Initialize the STM32F7 port module without touching hardware.
+ * @param config DMOD loader configuration; unused by this interface stub.
+ * @return 0 after the module is loaded.
+ */
+int dmod_init(const Dmod_Config_t *config)
 {
-    Dmod_Printf("dmsai port module initialized (stm32f7)\n");
+    (void)config;
+    Dmod_Printf("dmsai_port STM32F7 stub loaded\n");
     return 0;
 }
 
+/**
+ * @brief Deinitialize the STM32F7 port module.
+ * @return 0; no hardware resources are held by this stub.
+ */
 int dmod_deinit(void)
 {
-    Dmod_Printf("dmsai port module deinitialized (stm32f7)\n");
     return 0;
 }
-
-/* ---- API implementation ----
- *
- * Implement the dmod_dmsai_port_api_declaration(...) functions
- * declared in include/dmsai_port.h here. Register an interrupt
- * handler if needed, e.g.:
- *
- *   DMOD_IRQ_HANDLER(SOME_IRQn)
- *   {
- *       // handle interrupt
- *   }
- */

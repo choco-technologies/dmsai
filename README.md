@@ -3,126 +3,127 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/choco-technologies/dmsai/actions/workflows/ci.yml/badge.svg)](https://github.com/choco-technologies/dmsai/actions/workflows/ci.yml)
 
-dmsai DMOD library module.
+`dmsai` proposes a PCM SAI device driver for DMOD. It implements the `dmdrvi`
+DIF used by `dmdevfs`, following the same device model as `dmeth`: an INI
+section selects the driver and each configured controller is intended to appear
+as `/dev/dmsaiN`. Applications use ordinary file read/write operations and
+driver-specific `ioctl` commands. There is no separate stream Module API.
 
-## Description
+This revision contains headers and buildable stubs only. `dmdrvi_create()`
+returns `NULL`, so no device node appears yet and no hardware is touched.
 
-TODO: describe what this module does.
+## Device contract
 
-## Building
+The `dmdrvi` DIF supplies `create/free`, `open/close`, `read/write`, `ioctl`,
+`flush` and `stat`. The core will parse the active INI section selected by
+`dmdevfs`, allocate the device context and expose a major number equal to the
+zero-based `instance` (`/dev/dmsai0`, `/dev/dmsai1`, ...). Unknown ioctls are
+intended to return `-ENOTTY` when implemented.
 
-### Using CMake
+`read` and `write` transfer **bytes** of interleaved PCM in complete frames.
+Enabled slots are packed in ascending slot order. The sample representation
+is explicit: signed 16-bit little-endian, signed 24-bit in the low 24 bits of
+a 32-bit little-endian word, or signed 32-bit little-endian. For stereo 16-bit
+audio, one frame is four bytes. A request size must be a multiple of frame
+size; a successful transfer can return a shorter whole-frame count. The device
+is non-seekable. The port owns DMA buffers; callers pass normal PCM buffers.
+An open device has one exclusive handle, so two clients cannot independently
+start, stop or change the same stream.
 
-```bash
-mkdir -p build
-cd build
-cmake ..
-cmake --build .
+The device-specific commands in `dmsai_ioctl.h` are:
+
+| Command | Argument | Purpose |
+|---|---|---|
+| `DMSAI_IOCTL_GET_CONFIG` | `dmsai_config_t *` | Read effective configuration |
+| `DMSAI_IOCTL_START` | `NULL` | Start configured directions |
+| `DMSAI_IOCTL_STOP` | `NULL` | Stop transfer and wake pending I/O |
+| `DMSAI_IOCTL_GET_STATUS` | `dmsai_status_t *` | Read rate and error counters |
+| `DMSAI_IOCTL_SET_IO_TIMEOUT` | `const uint32_t *` | Set this handle's wait limit in ms; zero means no limit |
+| `DMSAI_IOCTL_GET_IO_TIMEOUT` | `uint32_t *` | Read this handle's wait limit |
+
+## Configuration example
+
+`dmdevfs` discovers the section from `driver_name=dmsai` and restricts the
+`dmini` context to it before calling the driver. Board pin routing and codec
+initialization are configured separately.
+
+```ini
+[audio0]
+driver_name=dmsai
+instance=0
+clock_role=master
+framing=i2s
+pcm_format=s16_le
+sample_rate_hz=48000
+tolerance_ppm=500
+slot_bits=16
+slot_count=2
+frame_bits=32
+active_slots=3
+transmit=on
+receive=off
 ```
 
-Pass `-DDMOD_DIR=/path/to/local/dmod` to build against a local dmod checkout
-instead of fetching `develop` from GitHub.
+The port decides which rate, role, framing and directions its target supports.
+The configuration format is a proposed contract; the present stub does not
+parse it.
 
-### Using Make
+Board GPIO mappings and pin-agnostic MCU defaults are in
+[configs/README.md](configs/README.md). Select one device section per SAI
+controller; the board examples are based on ST's audio BSP pin definitions.
 
-```bash
-make DMOD_MODE=DMOD_MODULE DMOD_DIR=/path/to/dmod
-```
+## Usage example
 
-## Testing
-
-Tests are built automatically alongside the module (see `tests/`). Once built,
-run them with `ctest`:
-
-```bash
-cd build
-ctest --output-on-failure
-```
-
-`ctest` installs the test module's dependencies with `dmf-get` and then runs
-it through `dmod_loader`. To run it manually instead:
-
-```bash
-export DMOD_DMF_DIR=$(pwd)/build/dmf
-dmf-get install -d ${DMOD_DMF_DIR}/test_dmsai-local.dmd -y
-dmod_loader build/dmf/test_dmsai.dmf
-```
-
-## Usage
-
-<TBD>
-
-This library module provides functions that can be used by other modules:
+This is the intended DMOD file API sequence once the driver is implemented.
+The current stub cannot be opened through `dmdevfs`.
 
 ```c
+#include "dmod.h"
 #include "dmsai.h"
+#include "dmsai_ioctl.h"
+
+int play_stereo(const int16_t *pcm, size_t frames)
+{
+    void *audio = Dmod_FileOpen("/dev/dmsai0", "w");
+    if (audio == NULL)
+        return -1;
+
+    int result = Dmod_Ioctl(audio, DMSAI_IOCTL_START, NULL);
+    if (result == 0)
+    {
+        size_t bytes = frames * 2u * sizeof(int16_t);
+        if (Dmod_FileWrite(pcm, 1, bytes, audio) != bytes)
+            result = -1;
+        if (result == 0)
+            result = Dmod_Ioctl(audio, DMSAI_IOCTL_STOP, NULL);
+    }
+    Dmod_FileClose(audio);
+    return result;
+}
 ```
 
-## API
+For capture, enable `receive=on`, open the node for reading and use
+`Dmod_FileRead`. For full duplex, enable both directions and open with `r+`.
+The codec and GPIO configuration still belong to their respective drivers.
 
-| Function | Description |
-|----------|-------------|
-| `dmsai_create()` | Create a new `dmsai_t` instance. |
-| `dmsai_destroy()` | Destroy an instance created by `_create()`. |
-| `dmsai_is_valid()` | Check whether a handle is a valid instance. |
+## Core and port layout
 
-See [include/dmsai.h](include/dmsai.h) for the full
-declarations and [docs/api-reference.md](docs/api-reference.md) for the
-complete reference.
+`dmsai` handles the `dmdrvi` DIF, INI configuration and byte/frame semantics.
+`dmsai_port` handles resource ownership, clocks, DMA and SAI registers. The
+port API uses only portable `dmsai_types.h` types. Its STM32 definitions are
+placed in `src/port/stm32_common/`; `src/port/stm32f7/port.c` contains only
+module lifecycle now and can later provide family-specific IRQ glue. Another
+STM32 family selects the same common source in its `config.cmake`. A different
+architecture can select its own common source without changing the public API.
 
-## Documentation
+## Build and tests
 
-See the `docs/` directory:
-
-- **[api-reference.md](docs/api-reference.md)** - Complete API documentation
-
-View documentation using `dmf-man dmsai`.
-
-## Hardware Port
-
-This module ships two DMOD modules: the architecture-independent
-`dmsai` and `dmsai_port`, which contains the
-architecture-specific implementation. The active architecture is selected via
-`DMOD_CPU_FAMILY` (default: `stm32f7`):
-
-```bash
-cmake .. -DDMOD_CPU_FAMILY=stm32f7
+```sh
+cmake -S . -B build -DDMOD_CPU_FAMILY=stm32f7 -DDMOD_DIR=/path/to/dmod
+cmake --build build
 ```
 
-See [docs/port-implementation.md](docs/port-implementation.md) for how to add
-another architecture. Port-specific files:
-
-```
-├── include/dmsai_port.h
-├── src/port/
-│   ├── CMakeLists.txt
-│   └── stm32f7/
-│       ├── config.cmake
-│       └── port.c
-└── dmsai_port.dmr
-```
-## Project Structure
-
-```
-dmsai/
-├── docs/              # Documentation (markdown format)
-├── include/           # Public headers
-│   └── dmsai.h
-├── src/
-│   └── dmsai.c
-├── tests/
-│   ├── CMakeLists.txt
-│   └── dmsai_test.c
-├── CMakeLists.txt
-├── Makefile
-├── dmsai.dmr
-└── manifest.dmm
-```
-
-## Author
-
-Patryk Kubiak
-
-## License
-
-MIT
+The existing `test_dmsai` target is retained. Running its Cortex-M7 module
+requires a compatible loader or target board; the Raspberry Pi AArch64 loader
+cannot execute it. See [API reference](docs/api-reference.md) for the detailed
+contracts.
