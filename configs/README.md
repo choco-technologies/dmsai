@@ -21,5 +21,6 @@ frame length. The generic MCU defaults use two 16-bit I2S slots and no board
 pins.
 
 The codec must be configured independently. These files are proposed inputs
-for the future driver: the current `dmsai` stub returns `NULL` from
-`dmdrvi_create()` and cannot expose a working `/dev/dmsaiN` device.
+for the future driver: the current `dmsai` callback returns `NULL` from
+`dmdrvi_create()`, so `dmdevfs` rejects the configuration instead of adding
+a `/dev/dmsaiN` node.

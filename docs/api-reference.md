@@ -6,9 +6,10 @@ finds `driver_name=dmsai`, passes the selected `dmini_context_t` to
 driver implements the standard DIF methods; applications reach it through
 the DMOD file API, not a `dmsai_create` function.
 
-All DIF functions are currently stubs. `create` and `open` return `NULL`;
-integer operations return `-ENOSYS`; `free` and `close` do nothing. This means
-the current revision registers an interface but cannot expose a working node.
+All `dmsai` DIF callbacks are currently stubs. `create` and `open` return
+`NULL`; integer operations return `-ENOSYS`; `free` and `close` do nothing.
+`dmdevfs` already implements node mounting, but it rejects this driver when
+`dmsai` returns `NULL` from `dmdrvi_create()`. No `/dev/dmsaiN` node is added.
 
 ## Configuration and node
 
@@ -61,4 +62,4 @@ optional synchronous RX block B, and polls their FIFOs for direct transfers.
 It accepts frames of at most 256 bits. If a block cannot complete a stop at a
 frame boundary, the port resets and reconfigures that controller and records a
 transfer error.
-The architecture-independent `dmdrvi` core remains a stub.
+The architecture-independent `dmsai` DIF callbacks remain stubs.

@@ -9,9 +9,11 @@ section selects the driver and each configured controller is intended to appear
 as `/dev/dmsaiN`. Applications use ordinary file read/write operations and
 driver-specific `ioctl` commands. There is no separate stream Module API.
 
-The `dmdrvi` core remains a stub: `dmdrvi_create()` returns `NULL`, so no
-device node appears yet. The STM32F7 `dmsai_port` now configures SAI hardware
-and can be exercised directly by another DMOD module.
+`dmdevfs` owns device node creation and mounting. The `dmsai` module's DIF
+callbacks are still stubs: its `dmdrvi_create()` returns `NULL`, so `dmdevfs`
+rejects this driver configuration and does not add a `/dev/dmsaiN` node yet.
+The STM32F7 `dmsai_port` now configures SAI hardware and can be exercised
+directly by another DMOD module.
 
 ## Device contract
 
