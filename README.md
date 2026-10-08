@@ -9,8 +9,9 @@ section selects the driver and each configured controller is intended to appear
 as `/dev/dmsaiN`. Applications use ordinary file read/write operations and
 driver-specific `ioctl` commands. There is no separate stream Module API.
 
-This revision contains headers and buildable stubs only. `dmdrvi_create()`
-returns `NULL`, so no device node appears yet and no hardware is touched.
+The `dmdrvi` core remains a stub: `dmdrvi_create()` returns `NULL`, so no
+device node appears yet. The STM32F7 `dmsai_port` now configures SAI hardware
+and can be exercised directly by another DMOD module.
 
 ## Device contract
 
@@ -26,7 +27,8 @@ is explicit: signed 16-bit little-endian, signed 24-bit in the low 24 bits of
 a 32-bit little-endian word, or signed 32-bit little-endian. For stereo 16-bit
 audio, one frame is four bytes. A request size must be a multiple of frame
 size; a successful transfer can return a shorter whole-frame count. The device
-is non-seekable. The port owns DMA buffers; callers pass normal PCM buffers.
+is non-seekable. Callers pass normal PCM buffers; the port owns its hardware
+resources and transfer mechanism.
 An open device has one exclusive handle, so two clients cannot independently
 start, stop or change the same stream.
 
@@ -65,8 +67,7 @@ receive=off
 ```
 
 The port decides which rate, role, framing and directions its target supports.
-The configuration format is a proposed contract; the present stub does not
-parse it.
+The core stub does not yet parse this configuration.
 
 Board GPIO mappings and pin-agnostic MCU defaults are in
 [configs/README.md](configs/README.md). Select one device section per SAI
@@ -108,13 +109,39 @@ The codec and GPIO configuration still belong to their respective drivers.
 
 ## Core and port layout
 
-`dmsai` handles the `dmdrvi` DIF, INI configuration and byte/frame semantics.
-`dmsai_port` handles resource ownership, clocks, DMA and SAI registers. The
+`dmsai` will handle the `dmdrvi` DIF, INI configuration and byte/frame semantics.
+`dmsai_port` handles resource ownership, clocks and SAI registers. The
 port API uses only portable `dmsai_types.h` types. Its STM32 definitions are
 placed in `src/port/stm32_common/`; `src/port/stm32f7/port.c` contains only
-module lifecycle now and can later provide family-specific IRQ glue. Another
+module lifecycle and a small hardware descriptor. Another
 STM32 family selects the same common source in its `config.cmake`. A different
 architecture can select its own common source without changing the public API.
+
+The STM32F7 port supports master I2S and TDM, 16-bit PCM or 24/32-bit PCM in
+32-bit slots, up to 16 slots, 256 frame bits and 96 kHz. It asks `dmclk_port`
+v1.2 for the SAI kernel clock before enabling the peripheral gate, then
+releases the clock after stopping and gating SAI. With `MCKDIV=2`, a 48 kHz
+stream requests 49.152 MHz and reports the achieved sample rate. SAI A
+generates the clocks and transmits; SAI B receives synchronously when
+requested. Board GPIO and codec setup remain separate.
+
+If a synchronous block does not acknowledge a stop within five milliseconds,
+the port resets that SAI controller, restores its configuration and increments
+the transfer error counter. This also allows a later start or deinitialization
+when an external frame signal is absent.
+
+Read and write currently poll the SAI FIFOs. This supports short direct port
+transfers and hardware bring-up; it does not provide continuous buffered audio
+across scheduling gaps. A later DMA-backed transfer engine is needed for
+sustained playback and recording. This limitation does not affect the clock,
+configuration, start/stop and status operations.
+
+`dmsai_port_board_test` is a direct hardware test on STM32F746G-DISCO. It
+configures SAI2 at 48 kHz and 44.1 kHz, checks registers, starts both blocks,
+writes one PCM frame, then checks that the clock and peripheral gate are
+released. Run it from the firmware shell after bundling `dmsai_port`, the test
+module and published `dmclk_port` v1.2. It does not initialize the WM8994
+codec or verify sound on an external pin.
 
 ## Build and tests
 
