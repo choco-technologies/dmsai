@@ -15,10 +15,11 @@ the current revision registers an interface but cannot expose a working node.
 `include/dmsai_types.h` describes the portable configuration. `instance` is
 zero-based, matching the intended `/dev/dmsaiN` major number. The core will
 read the selected INI section's `clock_role`, `framing`, `pcm_format`,
-`sample_rate_hz`, `tolerance_ppm`, `slot_bits`, `slot_count`, `active_slots`,
+`sample_rate_hz`, `tolerance_ppm`, `slot_bits`, `slot_count`, `frame_bits`, `active_slots`,
 `transmit` and `receive` keys. At least one direction must be enabled.
 `active_slots` is a mask within the configured slot count. Standard stereo I2S
-uses `slot_count=2`, `active_slots=3`. The port decides which combinations are
+uses `slot_count=2`, `frame_bits=32`, `active_slots=3` with 16-bit slots.
+`frame_bits` includes any padding after the selected slots. The port decides which combinations are
 available on a given target.
 
 ## PCM I/O

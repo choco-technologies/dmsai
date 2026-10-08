@@ -58,6 +58,7 @@ sample_rate_hz=48000
 tolerance_ppm=500
 slot_bits=16
 slot_count=2
+frame_bits=32
 active_slots=3
 transmit=on
 receive=off
@@ -66,6 +67,10 @@ receive=off
 The port decides which rate, role, framing and directions its target supports.
 The configuration format is a proposed contract; the present stub does not
 parse it.
+
+Board GPIO mappings and pin-agnostic MCU defaults are in
+[configs/README.md](configs/README.md). Select one device section per SAI
+controller; the board examples are based on ST's audio BSP pin definitions.
 
 ## Usage example
 

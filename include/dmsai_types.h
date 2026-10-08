@@ -46,6 +46,7 @@ typedef struct
     uint32_t tolerance_ppm;         /**< Maximum absolute clock error; zero means exact. */
     uint8_t slot_bits;              /**< Width on the wire of each time slot. */
     uint8_t slot_count;             /**< Number of slots in each frame, 1 to 32. */
+    uint16_t frame_bits;            /**< Total frame length on the wire, including padding. */
     uint32_t active_slots;          /**< Bit N selects time slot N. */
     bool transmit;                  /**< Enable write access to the TX direction. */
     bool receive;                   /**< Enable read access to the RX direction. */
