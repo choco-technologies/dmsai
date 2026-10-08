@@ -1,55 +1,58 @@
-# dmsai API reference
+# dmsai device API
 
-`include/dmsai.h`, `include/dmsai_types.h` and `include/dmsai_port.h` contain
-the Doxygen contract for every entry point and type. All public entry points
-currently return `-ENOSYS` without modifying output arguments. The API is a
-proposal; the examples in README document intended future behavior.
+The public device contract is the `dmdrvi` 2.0 DIF from `dmdrvi.h`. `dmdevfs`
+finds `driver_name=dmsai`, passes the selected `dmini_context_t` to
+`dmdrvi_create` and exposes the resulting major-numbered device node. The
+driver implements the standard DIF methods; applications reach it through
+the DMOD file API, not a `dmsai_create` function.
 
-## Configuration
+All DIF functions are currently stubs. `create` and `open` return `NULL`;
+integer operations return `-ENOSYS`; `free` and `close` do nothing. This means
+the current revision registers an interface but cannot expose a working node.
 
-`dmsai_config_t` has no register addresses, DMA channel numbers or STM32 clock
-identifiers. `instance` is a zero-based target peripheral index; its mapping
-belongs to the selected port. `format` selects I2S or TDM frame semantics.
-`role` selects whether the endpoint supplies or receives clocks. At least one
-of `transmit` and `receive` must be enabled. `active_slots` selects slots in
-the range `0..slot_count-1`; for standard stereo I2S use `slot_count=2` and
-`active_slots=0x3`. A future port validates supported widths, rates, masks,
-clock tolerance and direction combinations.
+## Configuration and node
 
-## Transfer
+`include/dmsai_types.h` describes the portable configuration. `instance` is
+zero-based, matching the intended `/dev/dmsaiN` major number. The core will
+read the selected INI section's `clock_role`, `framing`, `pcm_format`,
+`sample_rate_hz`, `tolerance_ppm`, `slot_bits`, `slot_count`, `active_slots`,
+`transmit` and `receive` keys. At least one direction must be enabled.
+`active_slots` is a mask within the configured slot count. Standard stereo I2S
+uses `slot_count=2`, `active_slots=3`. The port decides which combinations are
+available on a given target.
 
-`dmsai_start(context, tx, rx, elements, callback, user)` borrows the buffers.
-Each non-NULL buffer holds `elements` samples packed in ascending active-slot
-order. `elements` must be divisible by `2 * popcount(active_slots)`, which
-makes each buffer half contain complete frames. A 16-bit sample uses a
-`uint16_t` element; samples wider than 16 bits use `uint32_t`. Memory alignment
-and DMA visibility are port requirements. The two buffers cannot overlap.
+## PCM I/O
 
-On `dmsai_event_half`, the first half is available. On
-`dmsai_event_complete`, the second half is available. `dmsai_event_dma_error`
-and `dmsai_event_frame_error` signal faults; a caller should stop the stream
-and perform recovery outside interrupt context. The callback runs in interrupt
-context and must not call lifecycle functions.
+`dmdrvi_read` and `dmdrvi_write` use byte counts and return byte counts or
+negative errno values. The frame size is `popcount(active_slots)` multiplied
+by the PCM sample storage width (2 bytes for `s16_le`, 4 bytes otherwise).
+The request size and successful byte count are whole-frame multiples. The
+data is interleaved in ascending active-slot order. Offsets have no meaning
+for a stream; a future implementation will reject negative offsets and ignore
+non-negative offsets. A zero-length request returns zero. Read/write access
+requires the corresponding direction to be enabled and a successful START.
 
-`dmsai_get_status` returns cumulative event counters indexed by
-`dmsai_direction_t`, the actual sample rate and the running flag. The core
-will own the counters so that ports only report events.
+`DMSAI_IOCTL_START` and `DMSAI_IOCTL_STOP` control the stream. GET_CONFIG and
+GET_STATUS return the effective configuration and current counters. Timeout
+commands set or get a per-open-handle millisecond bound for blocking I/O;
+zero means wait indefinitely. All commands occupy the driver-specific range
+beginning at `DMDRVI_IOCTL_CUSTOM_BASE`. Unknown commands will return
+`-ENOTTY`. The precise argument types are documented in `dmsai_ioctl.h`.
+Opening a node is exclusive; a second open fails until the first handle closes.
 
-## Port contract
+`dmdrvi_flush` will wait for queued TX samples to reach the output. `stat`
+will report a non-seekable stream with size zero. The current stubs implement
+none of this behavior.
 
-The four `dmsai_port_*` functions mirror the hardware-sensitive operations.
-`dmsai_port_create` reserves resources and reports the actual frame rate;
-`start` and `stop` manage DMA and interrupt callbacks; `destroy` releases
-resources. All ports receive the same `dmsai_config_t`. A port does not parse
-application configuration or expose peripheral register types through headers.
+## Port boundary
 
-The STM32F7 layout demonstrates the planned sharing boundary:
+`include/dmsai_port.h` declares eight functions: instance count,
+init/deinit, start/stop, read/write and status. The port receives the same
+portable `dmsai_config_t` as the core and owns its internal DMA buffers.
+`read`/`write` copy whole frames between those buffers and caller memory.
+It does not know about `dmdevfs`, INI files, file handles or `dmdrvi` types.
 
-```text
-src/port/stm32_common/common.c  shared STM32 port entry points and future logic
-src/port/stm32f7/port.c         family lifecycle and future IRQ routing
-src/port/stm32f7/config.cmake   toolchain and shared-source selection
-```
-
-Another STM32 family can select the same common source and supply its small
-family files. A non-STM32 port selects its own implementation source.
+STM32 port API entry points reside in `src/port/stm32_common/common.c`; the
+family `port.c` is reserved for lifecycle, hardware descriptors and IRQ
+routing. Future STM32 families can share the common source. The current port
+entry points return `-ENOSYS` and do not touch hardware.

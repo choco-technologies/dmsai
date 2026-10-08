@@ -1,72 +1,98 @@
 #ifndef DMSAI_PORT_H
 #define DMSAI_PORT_H
 
+#include <stddef.h>
+#include <stdint.h>
 #include "dmsai_port_defs.h"
 #include "dmsai_types.h"
 
-/** @brief Opaque handle owned by the selected architecture port. */
-typedef struct dmsai_port_context *dmsai_port_context_t;
+/**
+ * @brief Report how many SAI controllers the selected target exposes.
+ *
+ * @return Non-negative instance count, or a negative errno value. The stub
+ * returns -ENOSYS.
+ */
+dmod_dmsai_port_api(1.0, int, _get_instance_count, ( void ));
 
 /**
- * @brief Port callback for DMA and peripheral events.
+ * @brief Reserve and configure one controller without starting data flow.
  *
- * Runs in interrupt context; `user` is the pointer supplied to
- * dmsai_port_start().
+ * The core owns the dmdevfs and dmdrvi context; the port owns only the
+ * hardware resources. Board pin configuration and codec control are separate.
  *
- * @param direction Direction that raised the event.
- * @param event Bitwise combination of dmsai_event_t flags.
- * @param user Caller-owned callback argument.
+ * @param config Portable configuration, valid for this call.
+ * @return 0 on success or negative errno. The stub returns -ENOSYS.
  */
-typedef void (*dmsai_port_callback_t)(dmsai_direction_t direction,
-                                       dmsai_event_t event, void *user);
+dmod_dmsai_port_api(1.0, int, _init, ( const dmsai_config_t *config ));
 
 /**
- * @brief Reserve and configure an architecture-specific SAI instance.
+ * @brief Stop and release one configured controller.
  *
- * The implementation validates the target's capabilities and writes both
- * outputs only on success. No data transfer begins until start.
- *
- * @param config Architecture-independent stream configuration.
- * @param context Receives the port handle on success.
- * @param actual_sample_rate_hz Receives the achievable frame rate in Hz.
- * @return 0 on success or a negative errno value. The stub returns -ENOSYS.
+ * @param instance Zero-based controller index.
+ * @return 0 on success or negative errno. The stub returns -ENOSYS.
  */
-dmod_dmsai_port_api(1.0, int, _create,
-    ( const dmsai_config_t *config, dmsai_port_context_t *context,
-      uint32_t *actual_sample_rate_hz ));
+dmod_dmsai_port_api(1.0, int, _deinit, ( dmsai_instance_t instance ));
 
 /**
- * @brief Stop and release a previously created port context.
+ * @brief Enable the configured TX and/or RX stream.
  *
- * @param context Handle returned by dmsai_port_create().
- * @return 0 on success or a negative errno value. The stub returns -ENOSYS.
+ * @param instance Zero-based controller index.
+ * @return 0 on success or negative errno. The stub returns -ENOSYS.
  */
-dmod_dmsai_port_api(1.0, int, _destroy, ( dmsai_port_context_t context ));
+dmod_dmsai_port_api(1.0, int, _start, ( dmsai_instance_t instance ));
 
 /**
- * @brief Start circular transfers through the selected hardware instance.
+ * @brief Disable the stream and wake blocked readers and writers.
  *
- * The buffer contract is the same as dmsai_start(). DMA and peripheral
- * events are forwarded to callback from interrupt context.
- *
- * @param context Configured port context.
- * @param tx Transmit samples, or NULL if transmit is disabled.
- * @param rx Receive samples, or NULL if receive is disabled.
- * @param elements Samples in each non-NULL buffer.
- * @param callback Optional event callback.
- * @param user Callback argument.
- * @return 0 on success or a negative errno value. The stub returns -ENOSYS.
+ * @param instance Zero-based controller index.
+ * @return 0 on success or negative errno. The stub returns -ENOSYS.
  */
-dmod_dmsai_port_api(1.0, int, _start,
-    ( dmsai_port_context_t context, const void *tx, void *rx, size_t elements,
-      dmsai_port_callback_t callback, void *user ));
+dmod_dmsai_port_api(1.0, int, _stop, ( dmsai_instance_t instance ));
 
 /**
- * @brief Stop all transfers and make buffers safe to release.
+ * @brief Copy complete PCM frames from RX into a caller buffer.
  *
- * @param context Configured port context.
- * @return 0 on success or a negative errno value. The stub returns -ENOSYS.
+ * `size` and `received` count bytes. A successful short transfer is allowed;
+ * only complete frames may be returned. The implementation may block up to
+ * timeout_ms while waiting for samples. A zero timeout means wait forever.
+ *
+ * @param instance Zero-based controller index.
+ * @param buffer Destination buffer.
+ * @param size Available bytes, a multiple of the PCM frame size.
+ * @param received Receives copied byte count on success.
+ * @param timeout_ms Maximum wait in milliseconds, or zero for no limit.
+ * @return 0 on success or negative errno. The stub returns -ENOSYS.
  */
-dmod_dmsai_port_api(1.0, int, _stop, ( dmsai_port_context_t context ));
+dmod_dmsai_port_api(1.0, int, _read,
+    ( dmsai_instance_t instance, void *buffer, size_t size, size_t *received,
+      uint32_t timeout_ms ));
+
+/**
+ * @brief Copy complete PCM frames from a caller buffer into TX.
+ *
+ * `size` and `written` count bytes. A successful short transfer is allowed;
+ * only complete frames may be accepted. The implementation may block up to
+ * timeout_ms while waiting for free space. A zero timeout means wait forever.
+ *
+ * @param instance Zero-based controller index.
+ * @param buffer Source buffer.
+ * @param size Source bytes, a multiple of the PCM frame size.
+ * @param written Receives accepted byte count on success.
+ * @param timeout_ms Maximum wait in milliseconds, or zero for no limit.
+ * @return 0 on success or negative errno. The stub returns -ENOSYS.
+ */
+dmod_dmsai_port_api(1.0, int, _write,
+    ( dmsai_instance_t instance, const void *buffer, size_t size,
+      size_t *written, uint32_t timeout_ms ));
+
+/**
+ * @brief Take a coherent snapshot of transfer state and counters.
+ *
+ * @param instance Zero-based controller index.
+ * @param status Receives status on success and remains unchanged on failure.
+ * @return 0 on success or negative errno. The stub returns -ENOSYS.
+ */
+dmod_dmsai_port_api(1.0, int, _get_status,
+    ( dmsai_instance_t instance, dmsai_status_t *status ));
 
 #endif /* DMSAI_PORT_H */

@@ -1,116 +1,124 @@
 # dmsai
 
-Proposed, architecture-independent SAI PCM transport API for DMOD. This PR
-defines the API and buildable stubs only. All stream and port operations return
-`-ENOSYS`; no audio peripheral, DMA engine, clocks, pins or codec are configured.
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/choco-technologies/dmsai/actions/workflows/ci.yml/badge.svg)](https://github.com/choco-technologies/dmsai/actions/workflows/ci.yml)
 
-## Modules and port layout
+`dmsai` proposes a PCM SAI device driver for DMOD. It implements the `dmdrvi`
+DIF used by `dmdevfs`, following the same device model as `dmeth`: an INI
+section selects the driver and each configured controller is intended to appear
+as `/dev/dmsaiN`. Applications use ordinary file read/write operations and
+driver-specific `ioctl` commands. There is no separate stream Module API.
 
-`dmsai` exposes the application API in `include/dmsai.h` and owns future
-configuration checks, stream lifetime and status accounting. `dmsai_port`
-exposes the hardware boundary in `include/dmsai_port.h`. Both are independently
-loadable DMOD modules; the core depends on the port interface.
+This revision contains headers and buildable stubs only. `dmdrvi_create()`
+returns `NULL`, so no device node appears yet and no hardware is touched.
 
-The selected `DMOD_CPU_FAMILY` supplies `src/port/<family>/config.cmake` and a
-small `port.c` for module lifecycle and future interrupt routing. The STM32F7
-family selects `src/port/stm32_common/common.c` for port API definitions, so
-register programming, clocks and DMA logic can later be shared with other
-STM32 families. A different architecture can select its own common sources
-through `DMSAI_PORT_COMMON_SOURCES` without changing the public headers.
+## Device contract
 
-## Public API
+The `dmdrvi` DIF supplies `create/free`, `open/close`, `read/write`, `ioctl`,
+`flush` and `stat`. The core will parse the active INI section selected by
+`dmdevfs`, allocate the device context and expose a major number equal to the
+zero-based `instance` (`/dev/dmsai0`, `/dev/dmsai1`, ...). Unknown ioctls are
+intended to return `-ENOTTY` when implemented.
 
-Include `dmsai.h`. Each function returns zero on success or a negative errno
-value. Contexts are opaque. A caller must serialize lifecycle operations on
-the same context. The API does not program a codec or board pin routing.
+`read` and `write` transfer **bytes** of interleaved PCM in complete frames.
+Enabled slots are packed in ascending slot order. The sample representation
+is explicit: signed 16-bit little-endian, signed 24-bit in the low 24 bits of
+a 32-bit little-endian word, or signed 32-bit little-endian. For stereo 16-bit
+audio, one frame is four bytes. A request size must be a multiple of frame
+size; a successful transfer can return a shorter whole-frame count. The device
+is non-seekable. The port owns DMA buffers; callers pass normal PCM buffers.
+An open device has one exclusive handle, so two clients cannot independently
+start, stop or change the same stream.
 
-| Function | Intended operation |
-|---|---|
-| `dmsai_create` | Validate configuration and reserve one stream |
-| `dmsai_start` | Start circular PCM transfer and optionally deliver events |
-| `dmsai_get_status` | Read actual sample rate, running state and event counters |
-| `dmsai_stop` | Stop transfers and release the borrowed PCM buffers |
-| `dmsai_destroy` | Release the stream context and hardware resources |
+The device-specific commands in `dmsai_ioctl.h` are:
 
-`dmsai_config_t` selects a zero-based peripheral instance, clock master/slave
-role, I2S or TDM framing, requested frame rate, allowed clock error in ppm,
-sample width, slot width/count, active slot mask, and enabled TX/RX directions.
-The port will decide which combinations its target supports and report a
-negative errno for unsupported configurations. For I2S, use two slots and
-mask `0x3`. `sample_bits` describes valid bits; a 24-bit sample is stored in
-a 32-bit buffer element with its valid bits in the low part.
+| Command | Argument | Purpose |
+|---|---|---|
+| `DMSAI_IOCTL_GET_CONFIG` | `dmsai_config_t *` | Read effective configuration |
+| `DMSAI_IOCTL_START` | `NULL` | Start configured directions |
+| `DMSAI_IOCTL_STOP` | `NULL` | Stop transfer and wake pending I/O |
+| `DMSAI_IOCTL_GET_STATUS` | `dmsai_status_t *` | Read rate and error counters |
+| `DMSAI_IOCTL_SET_IO_TIMEOUT` | `const uint32_t *` | Set this handle's wait limit in ms; zero means no limit |
+| `DMSAI_IOCTL_GET_IO_TIMEOUT` | `uint32_t *` | Read this handle's wait limit |
 
-`elements` in `dmsai_start` counts samples from active slots in **each**
-non-NULL buffer. Both halves of each circular buffer must hold complete frames,
-so use a multiple of twice the number of active slots. The callback reports
-which half is ready for refill or consumption and runs in interrupt context.
-PCM memory must be DMA-accessible for the chosen port and remain valid until
-`dmsai_stop` succeeds.
+## Configuration example
 
-### Example: stereo transmit
+`dmdevfs` discovers the section from `driver_name=dmsai` and restricts the
+`dmini` context to it before calling the driver. Board pin routing and codec
+initialization are configured separately.
 
-This illustrates the proposed call sequence. With the current stubs,
-`dmsai_create` returns `-ENOSYS`, so the transfer does not start.
+```ini
+[audio0]
+driver_name=dmsai
+instance=0
+clock_role=master
+framing=i2s
+pcm_format=s16_le
+sample_rate_hz=48000
+tolerance_ppm=500
+slot_bits=16
+slot_count=2
+active_slots=3
+transmit=on
+receive=off
+```
+
+The port decides which rate, role, framing and directions its target supports.
+The configuration format is a proposed contract; the present stub does not
+parse it.
+
+## Usage example
+
+This is the intended DMOD file API sequence once the driver is implemented.
+The current stub cannot be opened through `dmdevfs`.
 
 ```c
+#include "dmod.h"
 #include "dmsai.h"
+#include "dmsai_ioctl.h"
 
-static void audio_event(dmsai_context_t stream, dmsai_direction_t direction,
-                        dmsai_event_t event, void *user)
+int play_stereo(const int16_t *pcm, size_t frames)
 {
-    /* Notify a worker to refill the completed TX half. */
-    (void)stream;
-    (void)direction;
-    (void)event;
-    (void)user;
-}
+    void *audio = Dmod_FileOpen("/dev/dmsai0", "w");
+    if (audio == NULL)
+        return -1;
 
-int start_audio(uint16_t *dma_tx, size_t samples)
-{
-    dmsai_config_t config = {
-        .instance = 0,
-        .role = dmsai_clock_master,
-        .format = dmsai_format_i2s,
-        .sample_rate_hz = 48000,
-        .tolerance_ppm = 500,
-        .sample_bits = 16,
-        .slot_bits = 16,
-        .slot_count = 2,
-        .active_slots = 0x3,
-        .transmit = true,
-        .receive = false,
-    };
-    dmsai_context_t stream;
-    int result = dmsai_create(&config, &stream);
-    if (result != 0)
-        return result;
-
-    result = dmsai_start(stream, dma_tx, NULL, samples, audio_event, NULL);
+    int result = Dmod_Ioctl(audio, DMSAI_IOCTL_START, NULL);
     if (result == 0)
     {
-        dmsai_status_t status;
-        result = dmsai_get_status(stream, &status);
+        size_t bytes = frames * 2u * sizeof(int16_t);
+        if (Dmod_FileWrite(pcm, 1, bytes, audio) != bytes)
+            result = -1;
         if (result == 0)
-            result = dmsai_stop(stream);
+            result = Dmod_Ioctl(audio, DMSAI_IOCTL_STOP, NULL);
     }
-    int release_result = dmsai_destroy(stream);
-    return result != 0 ? result : release_result;
+    Dmod_FileClose(audio);
+    return result;
 }
 ```
 
-For full duplex, set both `transmit` and `receive`, supply separate TX/RX
-buffers of the same `elements` length, and use the callback's `direction` to
-choose which half to process. For RX-only, set `transmit = false`, pass `NULL`
-for TX and enable `receive`. Port support for RX-only and clock slave mode is
-target-dependent.
+For capture, enable `receive=on`, open the node for reading and use
+`Dmod_FileRead`. For full duplex, enable both directions and open with `r+`.
+The codec and GPIO configuration still belong to their respective drivers.
 
-## Build
+## Core and port layout
 
-On a host with the DMOD STM32F7 toolchain installed:
+`dmsai` handles the `dmdrvi` DIF, INI configuration and byte/frame semantics.
+`dmsai_port` handles resource ownership, clocks, DMA and SAI registers. The
+port API uses only portable `dmsai_types.h` types. Its STM32 definitions are
+placed in `src/port/stm32_common/`; `src/port/stm32f7/port.c` contains only
+module lifecycle now and can later provide family-specific IRQ glue. Another
+STM32 family selects the same common source in its `config.cmake`. A different
+architecture can select its own common source without changing the public API.
+
+## Build and tests
 
 ```sh
 cmake -S . -B build -DDMOD_CPU_FAMILY=stm32f7 -DDMOD_DIR=/path/to/dmod
 cmake --build build
 ```
 
-See [API reference](docs/api-reference.md) for parameter and error details.
+The existing `test_dmsai` target is retained. Running its Cortex-M7 module
+requires a compatible loader or target board; the Raspberry Pi AArch64 loader
+cannot execute it. See [API reference](docs/api-reference.md) for the detailed
+contracts.
