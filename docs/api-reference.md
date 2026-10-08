@@ -53,7 +53,7 @@ portable `dmsai_config_t` as the core and owns its internal DMA buffers.
 `read`/`write` copy whole frames between those buffers and caller memory.
 It does not know about `dmdevfs`, INI files, file handles or `dmdrvi` types.
 
-STM32 port API entry points reside in `src/port/stm32_common/common.c`; the
+STM32 port API entry points reside in `src/port/stm32_common/stm32_common.c`; the
 family `port.c` is reserved for lifecycle, hardware descriptors and IRQ
 routing. Future STM32 families can share the common source. The current port
 entry points return `-ENOSYS` and do not touch hardware.

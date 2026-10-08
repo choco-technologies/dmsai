@@ -30,7 +30,7 @@ set(DMOD_BUILD_TEMPLATES OFF CACHE BOOL "Build templates")
 FetchContent_MakeAvailable(dmod)
 
 project(dmsai VERSION ${DMOD_MODULE_VERSION}
-    DESCRIPTION "dmsai DMOD SAI transport library"
+    DESCRIPTION "dmsai DMOD library module"
     LANGUAGES C CXX)
 
 set(DMOD_DIR ${dmod_SOURCE_DIR} CACHE PATH "DMOD source directory")
@@ -53,28 +53,36 @@ set(DMOD_DMR_PATH           ${CMAKE_CURRENT_SOURCE_DIR}/dmsai.dmr)
 # List of MAL interfaces implemented by this module (leave empty if none)
 set(DMOD_MAL_IMPLS          )
 
+# List of DIF interfaces implemented by this module (leave empty if none)
+set(DMOD_DIF_IMPLS          )
+
 #
 #   dmod_add_library - create a library module
-#   it has the same signature as add_executable,
+#   it has the same signature as add_library
 #   and can be used in the same way after the creation
 #   (for example, to link libraries)
 #
 dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     # List of source files - can include C and C++ files
     src/dmsai.c
+    src/dmsai_private.c
 )
 
 target_include_directories(${DMOD_MODULE_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
 target_include_directories(${DMOD_MODULE_NAME}_if INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-dmod_link_modules(${DMOD_MODULE_NAME} dmdrvi dmini)
+# To depend on another module's headers, use:
+dmod_link_modules(${DMOD_MODULE_NAME}
+    dmini
+    dmdrvi
+)
 
 add_subdirectory(src/port)
-target_link_libraries(dmsai dmsai_port_if)
-
+target_link_libraries(${DMOD_MODULE_NAME} ${DMOD_MODULE_NAME}_port_if)
 enable_testing()
 add_subdirectory(tests)
