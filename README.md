@@ -146,10 +146,9 @@ module lifecycle and a small hardware descriptor. Another
 STM32 family selects the same common source in its `config.cmake`. A different
 architecture can select its own common source without changing the public API.
 
-The STM32F7 SAI2 port supports master I2S and TDM, 16-bit PCM or 24/32-bit PCM
-in 32-bit slots, up to 16 slots, 256 frame bits and 96 kHz. SAI1 currently
-returns `-ENOTSUP`: its DMA request uses channel zero, which the published
-`dmdma` API reserves for `DMDMA_REQUEST_NONE`. The port asks `dmclk_port`
+The STM32F7 SAI1 and SAI2 ports support master I2S and TDM, 16-bit PCM or
+24/32-bit PCM in 32-bit slots, up to 16 slots, 256 frame bits and 96 kHz.
+The port asks `dmclk_port`
 v1.2 for the SAI kernel clock before enabling the peripheral gate, then
 releases the clock after stopping and gating SAI. With `MCKDIV=2`, a 48 kHz
 stream requests 49.152 MHz and reports the achieved sample rate. SAI A
@@ -161,8 +160,11 @@ the port resets that SAI controller, restores its configuration and increments
 the transfer error counter. This also allows a later start or deinitialization
 when an external frame signal is absent.
 
-The port leases DMA2 stream 4/channel 3 for SAI2 A TX and stream 6/channel 3
-for SAI2 B RX through `dmdma` v0.5. Circular ping-pong buffers reside in the
+The port leases DMA2 stream 1/channel 0 for SAI1 A TX, stream 5/channel 0 for
+SAI1 B RX, stream 4/channel 3 for SAI2 A TX and stream 6/channel 3 for SAI2 B
+RX through `dmdma` v0.5. STM32 channel 0 is passed as request 8: the published
+STM32 port uses the low three request bits for the channel selector, while
+request 0 means `DMDMA_REQUEST_NONE`. Circular ping-pong buffers reside in the
 uncached `dmheap` DMA heap. DMA half/full callbacks move whole PCM frames
 between those buffers and bounded software queues; empty TX periods produce
 silence, while RX queue overflow increments `rx_overruns`. This keeps DMA
@@ -171,8 +173,9 @@ port accepted bytes into its queue; call `stop` only after allowing the queued
 audio time to play. The port does not configure board pins or the audio codec.
 
 `dmsai_port_board_test` is a direct hardware test on STM32F746G-DISCO. It
-temporarily routes SAI2 pins to AF10, configures 48 kHz and 44.1 kHz streams,
-checks both circular DMA streams and their progress, writes and reads PCM
+temporarily routes SAI1 pins to AF6 and SAI2 pins to AF10, configures 48 kHz
+and 44.1 kHz streams on both controllers, checks circular DMA progress,
+writes and reads PCM
 through the queues, then checks that the clock and peripheral gate are
 released. Run it from the firmware shell after bundling `dmsai_port`, the test
 module, `dmdma` v0.5 and `dmclk_port` v1.2. It restores the previous GPIO
