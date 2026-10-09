@@ -33,4 +33,5 @@ endif()
 
 if(DMOD_CPU_FAMILY STREQUAL "stm32f7")
     add_subdirectory(port-board-test)
+    add_subdirectory(driver-board-test)
 endif()

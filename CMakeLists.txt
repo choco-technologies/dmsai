@@ -6,7 +6,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/src/port/${DMOD_CPU_FAMILY}/config.cmake)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(NOT DEFINED DMOD_MODULE_VERSION)
-    set(DMOD_MODULE_VERSION "0.1" CACHE STRING "DMOD module version")
+    set(DMOD_MODULE_VERSION "0.2" CACHE STRING "DMOD module version")
 endif()
 
 # If a local dmod checkout is provided, use it instead of fetching from git

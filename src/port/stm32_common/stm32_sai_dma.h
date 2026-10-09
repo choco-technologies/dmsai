@@ -54,6 +54,14 @@ int stm32_sai_dma_write(stm32_sai_dma_t *dma, const void *buffer,
     size_t size, size_t *written, uint32_t timeout_ms);
 
 /**
+ * @brief Wait for queued TX data and its DMA half to finish transmission.
+ * @param dma Running context.
+ * @param timeout_ms Wait limit, or zero for no limit.
+ * @return 0 when drained or a negative errno on timeout, stop or DMA fault.
+ */
+int stm32_sai_dma_flush(stm32_sai_dma_t *dma, uint32_t timeout_ms);
+
+/**
  * @brief Copy complete PCM frames out of the software RX queue.
  * @param dma Running context.
  * @param buffer Destination for PCM bytes.

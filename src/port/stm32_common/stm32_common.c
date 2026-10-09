@@ -86,7 +86,8 @@ static int validate(const dmsai_config_t *config)
     if (config->slot_count < 2 || config->slot_count > 16 ||
         (config->slot_count & 1U) ||
         (config->slot_bits != 16 && config->slot_bits != 32) ||
-        config->frame_bits != config->slot_count * config->slot_bits ||
+        config->frame_bits < config->slot_count * config->slot_bits ||
+        (config->frame_bits & 1U) ||
         !config->active_slots ||
         (config->active_slots & ~((1U << config->slot_count) - 1U)))
         return -EINVAL;
@@ -338,6 +339,21 @@ dmod_dmsai_port_api_declaration(1.0, int, _write,
     if (__atomic_exchange_n(&state->tx_busy, true, __ATOMIC_ACQ_REL))
         return -EBUSY;
     int rc = stm32_sai_dma_write(state->dma, buffer, size, written, timeout_ms);
+    count_errors(instance, state);
+    __atomic_store_n(&state->tx_busy, false, __ATOMIC_RELEASE);
+    return rc;
+}
+
+/** @copydoc dmsai_port_flush */
+dmod_dmsai_port_api_declaration(1.0, int, _flush,
+    ( dmsai_instance_t instance, uint32_t timeout_ms ))
+{
+    sai_state_t *state = get_state(instance);
+    if (!state || !state->initialized || !state->config.transmit) return -ENODEV;
+    if (!__atomic_load_n(&state->status.running, __ATOMIC_ACQUIRE)) return -EPIPE;
+    if (__atomic_exchange_n(&state->tx_busy, true, __ATOMIC_ACQ_REL))
+        return -EBUSY;
+    int rc = stm32_sai_dma_flush(state->dma, timeout_ms);
     count_errors(instance, state);
     __atomic_store_n(&state->tx_busy, false, __ATOMIC_RELEASE);
     return rc;
