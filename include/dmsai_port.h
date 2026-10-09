@@ -94,6 +94,20 @@ dmod_dmsai_port_api(1.0, int, _write,
       size_t *written, uint32_t timeout_ms ));
 
 /**
+ * @brief Wait until all previously accepted TX frames reach the output.
+ *
+ * A zero timeout waits indefinitely. STOP interrupts the wait. Callers must
+ * serialize writes and flushes on the same stream.
+ *
+ * @param instance Zero-based controller index.
+ * @param timeout_ms Maximum wait in milliseconds, or zero for no limit.
+ * @return 0 when drained, -ETIMEDOUT on timeout, -ECANCELED after STOP,
+ * or a negative errno value for an unconfigured or failed stream.
+ */
+dmod_dmsai_port_api(1.0, int, _flush,
+    ( dmsai_instance_t instance, uint32_t timeout_ms ));
+
+/**
  * @brief Take a coherent snapshot of transfer state and counters.
  *
  * @param instance Zero-based controller index.

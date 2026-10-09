@@ -6,16 +6,15 @@ finds `driver_name=dmsai`, passes the selected `dmini_context_t` to
 driver implements the standard DIF methods; applications reach it through
 the DMOD file API, not a `dmsai_create` function.
 
-All `dmsai` DIF callbacks are currently stubs. `create` and `open` return
-`NULL`; integer operations return `-ENOSYS`; `free` and `close` do nothing.
-`dmdevfs` already implements node mounting, but it rejects this driver when
-`dmsai` returns `NULL` from `dmdrvi_create()`. No `/dev/dmsaiN` node is added.
+`create` validates the selected INI section and reserves the controller
+through `dmsai_port_init`. `dmdevfs` mounts `/dev/dmsaiN` using the zero-based
+instance as the major number. `free` stops and releases the port resources.
 
 ## Configuration and node
 
 `include/dmsai_types.h` describes the portable configuration. `instance` is
-zero-based, matching the intended `/dev/dmsaiN` major number. The core will
-read the selected INI section's `clock_role`, `framing`, `pcm_format`,
+zero-based, matching the `/dev/dmsaiN` major number. The core
+reads the selected INI section's `clock_role`, `framing`, `pcm_format`,
 `sample_rate_hz`, `tolerance_ppm`, `slot_bits`, `slot_count`, `frame_bits`, `active_slots`,
 `transmit` and `receive` keys. At least one direction must be enabled.
 `active_slots` is a mask within the configured slot count. Standard stereo I2S
@@ -30,26 +29,27 @@ negative errno values. The frame size is `popcount(active_slots)` multiplied
 by the PCM sample storage width (2 bytes for `s16_le`, 4 bytes otherwise).
 The request size and successful byte count are whole-frame multiples. The
 data is interleaved in ascending active-slot order. Offsets have no meaning
-for a stream; a future implementation will reject negative offsets and ignore
-non-negative offsets. A zero-length request returns zero. Read/write access
+for a stream; negative offsets are rejected and non-negative offsets are
+ignored. A zero-length request returns zero. Read/write access
 requires the corresponding direction to be enabled and a successful START.
 
 `DMSAI_IOCTL_START` and `DMSAI_IOCTL_STOP` control the stream. GET_CONFIG and
 GET_STATUS return the effective configuration and current counters. Timeout
 commands set or get a per-open-handle millisecond bound for blocking I/O;
 zero means wait indefinitely. All commands occupy the driver-specific range
-beginning at `DMDRVI_IOCTL_CUSTOM_BASE`. Unknown commands will return
+beginning at `DMDRVI_IOCTL_CUSTOM_BASE`. Unknown commands return
 `-ENOTTY`. The precise argument types are documented in `dmsai_ioctl.h`.
 Opening a node is exclusive; a second open fails until the first handle closes.
 
-`dmdrvi_flush` will wait for queued TX samples to reach the output. `stat`
-will report a non-seekable stream with size zero. The current stubs implement
-none of this behavior.
+`dmdrvi_flush` and `DMSAI_IOCTL_DRAIN` wait for queued TX samples to
+reach the output. They share the handle timeout. `stat` reports a zero-length
+stream with permissions determined by configured directions. Closing an open
+handle stops the stream and allows another exclusive open.
 
 ## Port boundary
 
-`include/dmsai_port.h` declares eight functions: instance count,
-init/deinit, start/stop, read/write and status. The port receives the same
+`include/dmsai_port.h` declares nine functions: instance count,
+init/deinit, start/stop, read/write, drain and status. The port receives the same
 portable `dmsai_config_t` as the core and owns its hardware resources.
 `read`/`write` copy whole frames between those buffers and caller memory.
 It does not know about `dmdevfs`, INI files, file handles or `dmdrvi` types.
@@ -61,10 +61,11 @@ uses `dmclk_port` v1.2 to reserve SAI clocks, configures master block A and
 optional synchronous RX block B, and uses `dmdma` circular transfers with
 uncached ping-pong buffers. SAI1 uses DMA2 stream 1/channel 0 for TX and
 stream 5/channel 0 for RX; SAI2 uses stream 4/channel 3 for TX and stream
-6/channel 3 for RX. The published STM32 `dmdma` port accepts request 8 for
-hardware channel 0, keeping it distinct from `DMDMA_REQUEST_NONE` (zero).
+6/channel 3 for RX. The STM32 `dmdma` port accepts the legacy request 8 alias
+for hardware channel 0; newer `dmdma` also accepts canonical request 0.
 Software queues decouple callers from DMA timing.
 It accepts frames of at most 256 bits. If a block cannot complete a stop at a
 frame boundary, the port resets and reconfigures that controller and records a
 transfer error.
-The architecture-independent `dmsai` DIF callbacks remain stubs.
+The architecture-independent `dmsai` DIF callbacks expose this port through
+`dmdevfs`.

@@ -52,4 +52,12 @@
  */
 #define DMSAI_IOCTL_GET_IO_TIMEOUT   (DMDRVI_IOCTL_CUSTOM_BASE + 5)
 
+/**
+ * @brief Wait until previously accepted TX frames reach the output.
+ *
+ * @par Argument
+ * NULL. The current handle's I/O timeout applies. STOP cancels the wait.
+ */
+#define DMSAI_IOCTL_DRAIN            (DMDRVI_IOCTL_CUSTOM_BASE + 6)
+
 #endif /* DMSAI_IOCTL_H */

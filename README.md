@@ -3,25 +3,23 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/choco-technologies/dmsai/actions/workflows/ci.yml/badge.svg)](https://github.com/choco-technologies/dmsai/actions/workflows/ci.yml)
 
-`dmsai` proposes a PCM SAI device driver for DMOD. It implements the `dmdrvi`
+`dmsai` is a PCM SAI device driver for DMOD. It implements the `dmdrvi`
 DIF used by `dmdevfs`, following the same device model as `dmeth`: an INI
-section selects the driver and each configured controller is intended to appear
-as `/dev/dmsaiN`. Applications use ordinary file read/write operations and
+section selects the driver and each configured controller appears as
+`/dev/dmsaiN`. Applications use ordinary file read/write operations and
 driver-specific `ioctl` commands. There is no separate stream Module API.
 
-`dmdevfs` owns device node creation and mounting. The `dmsai` module's DIF
-callbacks are still stubs: its `dmdrvi_create()` returns `NULL`, so `dmdevfs`
-rejects this driver configuration and does not add a `/dev/dmsaiN` node yet.
-The STM32F7 `dmsai_port` configures SAI hardware and runs circular DMA for
-direct port clients. It can be exercised by another DMOD module.
+`dmdevfs` owns device node creation and mounting. `dmsai` parses the
+selected INI section, reserves the controller through `dmsai_port`, and
+provides exclusive file handles. The STM32F7 port transfers PCM with
+circular DMA.
 
 ## Device contract
 
 The `dmdrvi` DIF supplies `create/free`, `open/close`, `read/write`, `ioctl`,
-`flush` and `stat`. The core will parse the active INI section selected by
-`dmdevfs`, allocate the device context and expose a major number equal to the
-zero-based `instance` (`/dev/dmsai0`, `/dev/dmsai1`, ...). Unknown ioctls are
-intended to return `-ENOTTY` when implemented.
+`flush` and `stat`. The core parses the active INI section selected by
+`dmdevfs`, allocates the device context and exposes a major number equal to the
+zero-based `instance` (`/dev/dmsai0`, `/dev/dmsai1`, ...). Unknown ioctls return `-ENOTTY`.
 
 `read` and `write` transfer **bytes** of interleaved PCM in complete frames.
 Enabled slots are packed in ascending slot order. The sample representation
@@ -44,6 +42,7 @@ The device-specific commands in `dmsai_ioctl.h` are:
 | `DMSAI_IOCTL_GET_STATUS` | `dmsai_status_t *` | Read rate and error counters |
 | `DMSAI_IOCTL_SET_IO_TIMEOUT` | `const uint32_t *` | Set this handle's wait limit in ms; zero means no limit |
 | `DMSAI_IOCTL_GET_IO_TIMEOUT` | `uint32_t *` | Read this handle's wait limit |
+| `DMSAI_IOCTL_DRAIN` | `NULL` | Wait until queued TX data reaches the output |
 
 ## Configuration example
 
@@ -69,7 +68,7 @@ receive=off
 ```
 
 The port decides which rate, role, framing and directions its target supports.
-The core stub does not yet parse this configuration.
+Invalid values or an already reserved controller prevent node creation.
 
 Board GPIO mappings and pin-agnostic MCU defaults are in
 [configs/README.md](configs/README.md). Select one device section per SAI
@@ -77,8 +76,7 @@ controller; the board examples are based on ST's audio BSP pin definitions.
 
 ## Usage example
 
-This is the intended DMOD file API sequence once the driver is implemented.
-The current stub cannot be opened through `dmdevfs`.
+This sequence sends PCM and waits for it to leave the DMA output before STOP.
 
 ```c
 #include "dmod.h"
@@ -98,7 +96,8 @@ int play_stereo(const int16_t *pcm, size_t frames)
         if (Dmod_FileWrite(pcm, 1, bytes, audio) != bytes)
             result = -1;
         if (result == 0)
-            result = Dmod_Ioctl(audio, DMSAI_IOCTL_STOP, NULL);
+            result = Dmod_Ioctl(audio, DMSAI_IOCTL_DRAIN, NULL);
+        Dmod_Ioctl(audio, DMSAI_IOCTL_STOP, NULL);
     }
     Dmod_FileClose(audio);
     return result;
@@ -129,7 +128,7 @@ size_t queued = 0;
 if (dmsai_port_init(&config) == 0) {
     if (dmsai_port_start(1) == 0) {
         dmsai_port_write(1, frame, sizeof(frame), &queued, 100);
-        Dmod_ThreadSleep(20); /* Let DMA drain the queue before stop. */
+        dmsai_port_flush(1, 100);
         dmsai_port_stop(1);
     }
     dmsai_port_deinit(1);
@@ -138,7 +137,7 @@ if (dmsai_port_init(&config) == 0) {
 
 ## Core and port layout
 
-`dmsai` will handle the `dmdrvi` DIF, INI configuration and byte/frame semantics.
+`dmsai` handles the `dmdrvi` DIF, INI configuration and byte/frame semantics.
 `dmsai_port` handles resource ownership, clocks and SAI registers. The
 port API uses only portable `dmsai_types.h` types. Its STM32 definitions are
 placed in `src/port/stm32_common/`; `src/port/stm32f7/port.c` contains only
@@ -162,15 +161,16 @@ when an external frame signal is absent.
 
 The port leases DMA2 stream 1/channel 0 for SAI1 A TX, stream 5/channel 0 for
 SAI1 B RX, stream 4/channel 3 for SAI2 A TX and stream 6/channel 3 for SAI2 B
-RX through `dmdma` v0.5. STM32 channel 0 is passed as request 8: the published
-STM32 port uses the low three request bits for the channel selector, while
-request 0 means `DMDMA_REQUEST_NONE`. Circular ping-pong buffers reside in the
+RX through `dmdma` v0.5. STM32 channel 0 is passed as request 8 for
+compatibility with older `dmdma` releases; its STM32 port maps the low three
+request bits to the hardware channel. Circular ping-pong buffers reside in the
 uncached `dmheap` DMA heap. DMA half/full callbacks move whole PCM frames
 between those buffers and bounded software queues; empty TX periods produce
 silence, while RX queue overflow increments `rx_overruns`. This keeps DMA
 memory valid across caller scheduling gaps. A successful `write` means the
-port accepted bytes into its queue; call `stop` only after allowing the queued
-audio time to play. The port does not configure board pins or the audio codec.
+port accepted bytes into its queue; `DMSAI_IOCTL_DRAIN` waits until the
+queued audio has reached the output before STOP. The port does not configure
+board pins or the audio codec.
 
 `dmsai_port_board_test` is a direct hardware test on STM32F746G-DISCO. It
 temporarily routes SAI1 pins to AF6 and SAI2 pins to AF10, configures 48 kHz
@@ -188,7 +188,10 @@ cmake -S . -B build -DDMOD_CPU_FAMILY=stm32f7 -DDMOD_DIR=/path/to/dmod
 cmake --build build
 ```
 
-The existing `test_dmsai` target is retained. Running its Cortex-M7 module
-requires a compatible loader or target board; the Raspberry Pi AArch64 loader
-cannot execute it. See [API reference](docs/api-reference.md) for the detailed
-contracts.
+The existing `test_dmsai` target is retained. `dmsai_driver_board_test`
+opens `/dev/dmsai1` through dmdevfs and checks configuration, exclusive open,
+start/stop, 300-frame DMA write, drain, RX read and status. Run it after
+mounting `configs/board/stm32f746g-disco/sai2.ini`. Running Cortex-M7 test
+modules requires a compatible loader or target board; the Raspberry Pi
+AArch64 loader cannot execute them. See [API reference](docs/api-reference.md)
+for the detailed contracts.

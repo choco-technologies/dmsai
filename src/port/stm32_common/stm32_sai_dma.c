@@ -36,6 +36,7 @@ struct stm32_sai_dma {
     uint32_t tx_tail;
     uint32_t rx_head;
     uint32_t rx_tail;
+    uint32_t tx_half_events;
     uint8_t frame_words;
     uint8_t sample_bytes;
     bool transmit;
@@ -127,11 +128,17 @@ static void dma_event(dmdma_lease_t lease, dmdma_event_t event, void *user_ptr)
     }
     if (event & dmdma_event_half_complete) {
         if (lane->receive) collect_rx(dma, 0);
-        else refill_tx(dma, 0);
+        else {
+            refill_tx(dma, 0);
+            __atomic_fetch_add(&dma->tx_half_events, 1U, __ATOMIC_RELEASE);
+        }
     }
     if (event & dmdma_event_complete) {
         if (lane->receive) collect_rx(dma, 1);
-        else refill_tx(dma, 1);
+        else {
+            refill_tx(dma, 1);
+            __atomic_fetch_add(&dma->tx_half_events, 1U, __ATOMIC_RELEASE);
+        }
     }
 }
 
@@ -241,6 +248,7 @@ int stm32_sai_dma_start(stm32_sai_dma_t *dma)
     if (dma->receive)
         memset(dma->rx_dma, 0, 2U * dma->half_words * sizeof(uint32_t));
     dma->tx_head = dma->tx_tail = dma->rx_head = dma->rx_tail = 0;
+    dma->tx_half_events = 0;
     dma->tx_has_data = false;
     __atomic_store_n(&dma->fault, false, __ATOMIC_RELEASE);
     __atomic_store_n(&dma->active, true, __ATOMIC_RELEASE);
@@ -299,6 +307,30 @@ int stm32_sai_dma_write(stm32_sai_dma_t *dma, const void *buffer,
         } else if ((rc = wait_queue(dma, started, timeout_ms)) != 0) break;
     }
     return *written ? 0 : rc;
+}
+
+/** @copydoc stm32_sai_dma_flush */
+int stm32_sai_dma_flush(stm32_sai_dma_t *dma, uint32_t timeout_ms)
+{
+    if (!dma || !dma->transmit) return -ENODEV;
+    if (!__atomic_load_n(&dma->tx_has_data, __ATOMIC_ACQUIRE)) return 0;
+    Dmod_Timestamp_t started = Dmod_GetUptime();
+    uint32_t last_word = __atomic_load_n(&dma->tx_head, __ATOMIC_ACQUIRE);
+    while ((int32_t)(__atomic_load_n(&dma->tx_tail, __ATOMIC_ACQUIRE) -
+                     last_word) < 0) {
+        int rc = wait_queue(dma, started, timeout_ms);
+        if (rc != 0) return rc;
+    }
+    /* The last queued frame was placed in a completed half. Tail can become
+     * visible before that callback increments tx_half_events, so wait three
+     * more completions to cover that race and transmit the entire half. */
+    uint32_t completed = __atomic_load_n(&dma->tx_half_events, __ATOMIC_ACQUIRE);
+    while ((uint32_t)(__atomic_load_n(&dma->tx_half_events, __ATOMIC_ACQUIRE) -
+                      completed) < 3U) {
+        int rc = wait_queue(dma, started, timeout_ms);
+        if (rc != 0) return rc;
+    }
+    return 0;
 }
 
 /** @copydoc stm32_sai_dma_read */
