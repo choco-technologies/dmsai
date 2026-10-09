@@ -6,9 +6,10 @@ finds `driver_name=dmsai`, passes the selected `dmini_context_t` to
 driver implements the standard DIF methods; applications reach it through
 the DMOD file API, not a `dmsai_create` function.
 
-All DIF functions are currently stubs. `create` and `open` return `NULL`;
-integer operations return `-ENOSYS`; `free` and `close` do nothing. This means
-the current revision registers an interface but cannot expose a working node.
+All `dmsai` DIF callbacks are currently stubs. `create` and `open` return
+`NULL`; integer operations return `-ENOSYS`; `free` and `close` do nothing.
+`dmdevfs` already implements node mounting, but it rejects this driver when
+`dmsai` returns `NULL` from `dmdrvi_create()`. No `/dev/dmsaiN` node is added.
 
 ## Configuration and node
 
@@ -49,11 +50,21 @@ none of this behavior.
 
 `include/dmsai_port.h` declares eight functions: instance count,
 init/deinit, start/stop, read/write and status. The port receives the same
-portable `dmsai_config_t` as the core and owns its internal DMA buffers.
+portable `dmsai_config_t` as the core and owns its hardware resources.
 `read`/`write` copy whole frames between those buffers and caller memory.
 It does not know about `dmdevfs`, INI files, file handles or `dmdrvi` types.
 
 STM32 port API entry points reside in `src/port/stm32_common/stm32_common.c`; the
 family `port.c` is reserved for lifecycle, hardware descriptors and IRQ
-routing. Future STM32 families can share the common source. The current port
-entry points return `-ENOSYS` and do not touch hardware.
+routing. Future STM32 families can share the common source. The STM32F7 port
+uses `dmclk_port` v1.2 to reserve SAI clocks, configures master block A and
+optional synchronous RX block B, and uses `dmdma` circular transfers with
+uncached ping-pong buffers. SAI1 uses DMA2 stream 1/channel 0 for TX and
+stream 5/channel 0 for RX; SAI2 uses stream 4/channel 3 for TX and stream
+6/channel 3 for RX. The published STM32 `dmdma` port accepts request 8 for
+hardware channel 0, keeping it distinct from `DMDMA_REQUEST_NONE` (zero).
+Software queues decouple callers from DMA timing.
+It accepts frames of at most 256 bits. If a block cannot complete a stop at a
+frame boundary, the port resets and reconfigures that controller and records a
+transfer error.
+The architecture-independent `dmsai` DIF callbacks remain stubs.

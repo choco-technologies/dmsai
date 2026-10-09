@@ -14,3 +14,9 @@ target_include_directories(${DMOD_MODULE_NAME} PRIVATE
 target_include_directories(${DMOD_MODULE_NAME}_if INTERFACE
     ${CMAKE_SOURCE_DIR}/include
 )
+
+dmod_link_modules(${DMOD_MODULE_NAME}
+    dmclk_port@>=1.2
+    dmdma@>=0.5
+    dmheap
+)

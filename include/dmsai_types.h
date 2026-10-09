@@ -58,7 +58,7 @@ typedef struct
     uint32_t actual_sample_rate_hz; /**< Frame rate achieved by the port. */
     uint32_t tx_underruns;          /**< Transmit starvation events since creation. */
     uint32_t rx_overruns;           /**< Receive samples lost since creation. */
-    uint32_t transfer_errors;       /**< Other DMA or serial transfer failures. */
+    uint32_t transfer_errors;       /**< Other transfer errors, including forced recovery on stop. */
     bool running;                   /**< True after successful START. */
 } dmsai_status_t;
 
