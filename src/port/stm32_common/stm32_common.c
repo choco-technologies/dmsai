@@ -1,6 +1,7 @@
 #define DMOD_ENABLE_REGISTRATION ON
 #include "dmsai_port.h"
 #include "stm32_sai.h"
+#include "stm32_sai_dma.h"
 #include "dmod.h"
 #include <errno.h>
 #include <stdbool.h>
@@ -21,9 +22,8 @@
 #define SAI_CLRFR 0x18U
 #define SAI_DR 0x1CU
 #define SAIEN (1U << 16)
+#define SAI_DMAEN (1U << 17)
 #define FIFO_FLUSH (1U << 3)
-#define FIFO_LEVEL(sr) (((sr) >> 16) & 7U)
-#define FIFO_FULL 5U
 #define ERROR_FLAGS 0x75U
 #define MCKDIV 2U
 #define KERNEL_CLOCK_FACTOR (256U * 2U * MCKDIV)
@@ -37,6 +37,7 @@ typedef struct {
     bool busy;
     bool tx_busy;
     bool rx_busy;
+    stm32_sai_dma_t *dma;
 } sai_state_t;
 
 static const stm32_sai_family_t *family;
@@ -124,31 +125,12 @@ static void configure_block(unsigned instance, bool block_b,
     uint32_t slotr = ((config->slot_bits == 16 ? 1U : 2U) << 6) |
         ((config->slot_count - 1U) << 8) | (config->active_slots << 16);
     *block_reg(instance, block_b, SAI_CR1) = cr1;
-    *block_reg(instance, block_b, SAI_CR2) = FIFO_FLUSH;
+    *block_reg(instance, block_b, SAI_CR2) =
+        FIFO_FLUSH | (block_b ? 0U : 4U); /* Fill TX FIFO before first frame. */
     *block_reg(instance, block_b, SAI_FRCR) = frcr;
     *block_reg(instance, block_b, SAI_SLOTR) = slotr;
     *block_reg(instance, block_b, SAI_IMR) = 0;
     *block_reg(instance, block_b, SAI_CLRFR) = 0x7FU;
-}
-
-/** @brief Decode one little-endian PCM sample for the SAI data register. */
-static uint32_t sample_from_pcm(const uint8_t *source, uint8_t width,
-                                 dmsai_pcm_format_t format)
-{
-    uint32_t sample = 0;
-    for (uint8_t byte = 0; byte < width; ++byte)
-        sample |= (uint32_t)source[byte] << (8U * byte);
-    return format == dmsai_pcm_s24_in32_le ? sample & 0xFFFFFFU : sample;
-}
-
-/** @brief Encode one SAI sample into little-endian PCM memory. */
-static void sample_to_pcm(uint8_t *destination, uint8_t width,
-                          uint32_t sample, bool sign_extend)
-{
-    if (sign_extend && (sample & 0x800000U))
-        sample |= 0xFF000000U;
-    for (uint8_t byte = 0; byte < width; ++byte)
-        destination[byte] = (uint8_t)(sample >> (8U * byte));
 }
 
 /** @brief Accumulate and clear the hardware error flags of active blocks. */
@@ -158,32 +140,15 @@ static void count_errors(unsigned instance, sai_state_t *state)
         if (block && !state->config.receive) continue;
         uint32_t flags = *block_reg(instance, block != 0, SAI_SR) & ERROR_FLAGS;
         if (flags & 1U) {
-            if (block) ++state->status.rx_overruns;
-            else ++state->status.tx_underruns;
+            uint32_t *counter = block ? &state->status.rx_overruns :
+                                        &state->status.tx_underruns;
+            __atomic_fetch_add(counter, 1U, __ATOMIC_RELAXED);
         }
-        if (flags & ~1U) ++state->status.transfer_errors;
+        if (flags & ~1U)
+            __atomic_fetch_add(&state->status.transfer_errors, 1U,
+                               __ATOMIC_RELAXED);
         if (flags) *block_reg(instance, block != 0, SAI_CLRFR) = flags;
     }
-}
-
-/** @brief Wait until a FIFO can provide or accept one sample. */
-static int wait_fifo(unsigned instance, bool rx, sai_state_t *state,
-                     Dmod_Timestamp_t started, uint32_t timeout_ms)
-{
-    uint32_t spins = 0;
-    while (state->status.running) {
-        uint32_t sr = *block_reg(instance, rx, SAI_SR);
-        if (rx ? FIFO_LEVEL(sr) != 0 : FIFO_LEVEL(sr) != FIFO_FULL)
-            return 0;
-        if (sr & ERROR_FLAGS) count_errors(instance, state);
-        if (timeout_ms && Dmod_GetUptime() - started >= timeout_ms)
-            return -ETIMEDOUT;
-        if (++spins == 10000U) {
-            Dmod_ThreadSleep(0);
-            spins = 0;
-        }
-    }
-    return -ECANCELED;
 }
 
 /** @copydoc stm32_sai_set_family */
@@ -214,6 +179,7 @@ dmod_dmsai_port_api_declaration(1.0, int, _init,
     int rc = validate(config);
     if (rc != 0) return rc;
     unsigned index = config->instance;
+    if (family->dma[index].tx_stream == UINT8_MAX) return -ENOTSUP;
     sai_state_t *state = &states[index];
     if (state->initialized || state->busy ||
         (*rcc_reg(RCC_APB2ENR) & family->sai_enable[index]))
@@ -232,16 +198,24 @@ dmod_dmsai_port_api_declaration(1.0, int, _init,
         configure_block(index, false, config);
         if (config->receive) configure_block(index, true, config);
         memset(state, 0, sizeof(*state));
+        state->busy = true;
         state->config = *config;
         state->sample_bytes = config->slot_bits / 8U;
         state->active_count = count_slots(config->active_slots);
         state->status.actual_sample_rate_hz =
             (uint32_t)((actual + KERNEL_CLOCK_FACTOR / 2U) /
                        KERNEL_CLOCK_FACTOR);
-        state->initialized = true;
-    } else {
-        state->busy = false;
+        rc = stm32_sai_dma_create(&state->dma, &family->dma[index],
+            (uintptr_t)block_reg(index, false, SAI_DR),
+            (uintptr_t)block_reg(index, true, SAI_DR), config,
+            &state->status);
+        if (rc == 0) state->initialized = true;
+        else {
+            *rcc_reg(RCC_APB2ENR) &= ~family->sai_enable[index];
+            dmclk_port_release_domain(family->clock_domain[index]);
+        }
     }
+    state->busy = false;
     return rc;
 }
 
@@ -251,7 +225,11 @@ dmod_dmsai_port_api_declaration(1.0, int, _stop,
 {
     sai_state_t *state = get_state(instance);
     if (!state || !state->initialized) return -ENODEV;
-    state->status.running = false;
+    __atomic_store_n(&state->status.running, false, __ATOMIC_RELEASE);
+    *block_reg(instance, false, SAI_CR1) &= ~SAI_DMAEN;
+    if (state->config.receive)
+        *block_reg(instance, true, SAI_CR1) &= ~SAI_DMAEN;
+    stm32_sai_dma_stop(state->dma);
     if (state->config.receive)
         *block_reg(instance, true, SAI_CR1) &= ~SAIEN;
     *block_reg(instance, false, SAI_CR1) &= ~SAIEN;
@@ -277,7 +255,8 @@ dmod_dmsai_port_api_declaration(1.0, int, _stop,
         configure_block(instance, false, &state->config);
         if (state->config.receive)
             configure_block(instance, true, &state->config);
-        ++state->status.transfer_errors;
+        __atomic_fetch_add(&state->status.transfer_errors, 1U,
+                           __ATOMIC_RELAXED);
         return 0;
     }
     *block_reg(instance, false, SAI_CR2) |= FIFO_FLUSH;
@@ -295,6 +274,8 @@ dmod_dmsai_port_api_declaration(1.0, int, _deinit,
     if (state->busy || state->tx_busy || state->rx_busy) return -EBUSY;
     int rc = dmsai_port_stop(instance);
     if (rc != 0) return rc;
+    stm32_sai_dma_destroy(state->dma);
+    state->dma = NULL;
     *rcc_reg(RCC_APB2ENR) &= ~family->sai_enable[instance];
     rc = dmclk_port_release_domain(family->clock_domain[instance]);
     if (rc == 0) memset(state, 0, sizeof(*state));
@@ -307,16 +288,20 @@ dmod_dmsai_port_api_declaration(1.0, int, _start,
 {
     sai_state_t *state = get_state(instance);
     if (!state || !state->initialized) return -ENODEV;
-    if (state->status.running) return 0;
+    if (__atomic_load_n(&state->status.running, __ATOMIC_ACQUIRE)) return 0;
     *block_reg(instance, false, SAI_CLRFR) = 0x7FU;
     if (state->config.receive) {
         *block_reg(instance, true, SAI_CLRFR) = 0x7FU;
-        *block_reg(instance, true, SAI_CR1) |= SAIEN;
     }
-    for (unsigned i = 0; i < state->active_count && i < 8; ++i)
-        *block_reg(instance, false, SAI_DR) = 0;
-    state->status.running = true;
+    int rc = stm32_sai_dma_start(state->dma);
+    if (rc != 0) return rc;
+    if (state->config.receive)
+        *block_reg(instance, true, SAI_CR1) |= SAIEN;
+    __atomic_store_n(&state->status.running, true, __ATOMIC_RELEASE);
     *block_reg(instance, false, SAI_CR1) |= SAIEN;
+    *block_reg(instance, false, SAI_CR1) |= SAI_DMAEN;
+    if (state->config.receive)
+        *block_reg(instance, true, SAI_CR1) |= SAI_DMAEN;
     return 0;
 }
 
@@ -330,28 +315,13 @@ dmod_dmsai_port_api_declaration(1.0, int, _read,
     size_t frame_bytes = state->active_count * state->sample_bytes;
     if (!received || (!buffer && size) || size % frame_bytes) return -EINVAL;
     *received = 0;
-    if (!state->status.running) return -EPIPE;
-    if (state->rx_busy) return -EBUSY;
-    state->rx_busy = true;
-    Dmod_Timestamp_t started = Dmod_GetUptime();
-    uint8_t frame[16 * 4];
-    int rc = 0;
-    while (*received < size) {
-        for (unsigned slot = 0; slot < state->active_count; ++slot) {
-            rc = wait_fifo(instance, true, state, started, timeout_ms);
-            if (rc != 0) goto done;
-            uint32_t sample = *block_reg(instance, true, SAI_DR);
-            sample_to_pcm(frame + slot * state->sample_bytes,
-                state->sample_bytes, sample,
-                state->config.pcm_format == dmsai_pcm_s24_in32_le);
-        }
-        memcpy((uint8_t *)buffer + *received, frame, frame_bytes);
-        *received += frame_bytes;
-    }
-done:
+    if (!__atomic_load_n(&state->status.running, __ATOMIC_ACQUIRE)) return -EPIPE;
+    if (__atomic_exchange_n(&state->rx_busy, true, __ATOMIC_ACQ_REL))
+        return -EBUSY;
+    int rc = stm32_sai_dma_read(state->dma, buffer, size, received, timeout_ms);
     count_errors(instance, state);
-    state->rx_busy = false;
-    return *received ? 0 : rc;
+    __atomic_store_n(&state->rx_busy, false, __ATOMIC_RELEASE);
+    return rc;
 }
 
 /** @copydoc dmsai_port_write */
@@ -364,26 +334,13 @@ dmod_dmsai_port_api_declaration(1.0, int, _write,
     size_t frame_bytes = state->active_count * state->sample_bytes;
     if (!written || (!buffer && size) || size % frame_bytes) return -EINVAL;
     *written = 0;
-    if (!state->status.running) return -EPIPE;
-    if (state->tx_busy) return -EBUSY;
-    state->tx_busy = true;
-    Dmod_Timestamp_t started = Dmod_GetUptime();
-    int rc = 0;
-    while (*written < size) {
-        for (unsigned slot = 0; slot < state->active_count; ++slot) {
-            rc = wait_fifo(instance, false, state, started, timeout_ms);
-            if (rc != 0) goto done;
-            uint32_t sample = sample_from_pcm(
-                (const uint8_t *)buffer + *written + slot * state->sample_bytes,
-                state->sample_bytes, state->config.pcm_format);
-            *block_reg(instance, false, SAI_DR) = sample;
-        }
-        *written += frame_bytes;
-    }
-done:
+    if (!__atomic_load_n(&state->status.running, __ATOMIC_ACQUIRE)) return -EPIPE;
+    if (__atomic_exchange_n(&state->tx_busy, true, __ATOMIC_ACQ_REL))
+        return -EBUSY;
+    int rc = stm32_sai_dma_write(state->dma, buffer, size, written, timeout_ms);
     count_errors(instance, state);
-    state->tx_busy = false;
-    return *written ? 0 : rc;
+    __atomic_store_n(&state->tx_busy, false, __ATOMIC_RELEASE);
+    return rc;
 }
 
 /** @copydoc dmsai_port_get_status */

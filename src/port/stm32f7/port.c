@@ -7,6 +7,11 @@ static const stm32_sai_family_t stm32f7_sai = {
     .sai_base = {0x40015800U, 0x40015C00U},
     .sai_enable = {1U << 22, 1U << 23},
     .clock_domain = {dmclk_domain_sai1, dmclk_domain_sai2},
+    .dma = {
+        { .controller = 1, .tx_stream = UINT8_MAX },
+        { .controller = 1, .tx_stream = 4, .rx_stream = 6,
+          .tx_request = 3, .rx_request = 3 },
+    },
     .count = 2,
 };
 

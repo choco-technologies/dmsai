@@ -12,8 +12,8 @@ driver-specific `ioctl` commands. There is no separate stream Module API.
 `dmdevfs` owns device node creation and mounting. The `dmsai` module's DIF
 callbacks are still stubs: its `dmdrvi_create()` returns `NULL`, so `dmdevfs`
 rejects this driver configuration and does not add a `/dev/dmsaiN` node yet.
-The STM32F7 `dmsai_port` now configures SAI hardware and can be exercised
-directly by another DMOD module.
+The STM32F7 `dmsai_port` configures SAI hardware and runs circular DMA for
+direct port clients. It can be exercised by another DMOD module.
 
 ## Device contract
 
@@ -109,6 +109,33 @@ For capture, enable `receive=on`, open the node for reading and use
 `Dmod_FileRead`. For full duplex, enable both directions and open with `r+`.
 The codec and GPIO configuration still belong to their respective drivers.
 
+For a direct port client on STM32F746G-DISCO, configure the SAI2 pins as in
+`configs/board/stm32f746g-disco/sai2.ini` and initialize the codec separately.
+The following code then queues one stereo frame through circular DMA:
+
+```c
+#include "dmod.h"
+#include "dmsai_port.h"
+
+dmsai_config_t config = {
+    .instance = 1, .clock_role = dmsai_clock_master,
+    .framing = dmsai_frame_i2s, .pcm_format = dmsai_pcm_s16_le,
+    .sample_rate_hz = 48000, .tolerance_ppm = 500,
+    .slot_bits = 16, .slot_count = 2, .frame_bits = 32,
+    .active_slots = 3, .transmit = true,
+};
+int16_t frame[2] = { 0, 0 };
+size_t queued = 0;
+if (dmsai_port_init(&config) == 0) {
+    if (dmsai_port_start(1) == 0) {
+        dmsai_port_write(1, frame, sizeof(frame), &queued, 100);
+        Dmod_ThreadSleep(20); /* Let DMA drain the queue before stop. */
+        dmsai_port_stop(1);
+    }
+    dmsai_port_deinit(1);
+}
+```
+
 ## Core and port layout
 
 `dmsai` will handle the `dmdrvi` DIF, INI configuration and byte/frame semantics.
@@ -119,8 +146,10 @@ module lifecycle and a small hardware descriptor. Another
 STM32 family selects the same common source in its `config.cmake`. A different
 architecture can select its own common source without changing the public API.
 
-The STM32F7 port supports master I2S and TDM, 16-bit PCM or 24/32-bit PCM in
-32-bit slots, up to 16 slots, 256 frame bits and 96 kHz. It asks `dmclk_port`
+The STM32F7 SAI2 port supports master I2S and TDM, 16-bit PCM or 24/32-bit PCM
+in 32-bit slots, up to 16 slots, 256 frame bits and 96 kHz. SAI1 currently
+returns `-ENOTSUP`: its DMA request uses channel zero, which the published
+`dmdma` API reserves for `DMDMA_REQUEST_NONE`. The port asks `dmclk_port`
 v1.2 for the SAI kernel clock before enabling the peripheral gate, then
 releases the clock after stopping and gating SAI. With `MCKDIV=2`, a 48 kHz
 stream requests 49.152 MHz and reports the achieved sample rate. SAI A
@@ -132,18 +161,22 @@ the port resets that SAI controller, restores its configuration and increments
 the transfer error counter. This also allows a later start or deinitialization
 when an external frame signal is absent.
 
-Read and write currently poll the SAI FIFOs. This supports short direct port
-transfers and hardware bring-up; it does not provide continuous buffered audio
-across scheduling gaps. A later DMA-backed transfer engine is needed for
-sustained playback and recording. This limitation does not affect the clock,
-configuration, start/stop and status operations.
+The port leases DMA2 stream 4/channel 3 for SAI2 A TX and stream 6/channel 3
+for SAI2 B RX through `dmdma` v0.5. Circular ping-pong buffers reside in the
+uncached `dmheap` DMA heap. DMA half/full callbacks move whole PCM frames
+between those buffers and bounded software queues; empty TX periods produce
+silence, while RX queue overflow increments `rx_overruns`. This keeps DMA
+memory valid across caller scheduling gaps. A successful `write` means the
+port accepted bytes into its queue; call `stop` only after allowing the queued
+audio time to play. The port does not configure board pins or the audio codec.
 
 `dmsai_port_board_test` is a direct hardware test on STM32F746G-DISCO. It
-configures SAI2 at 48 kHz and 44.1 kHz, checks registers, starts both blocks,
-writes one PCM frame, then checks that the clock and peripheral gate are
+temporarily routes SAI2 pins to AF10, configures 48 kHz and 44.1 kHz streams,
+checks both circular DMA streams and their progress, writes and reads PCM
+through the queues, then checks that the clock and peripheral gate are
 released. Run it from the firmware shell after bundling `dmsai_port`, the test
-module and published `dmclk_port` v1.2. It does not initialize the WM8994
-codec or verify sound on an external pin.
+module, `dmdma` v0.5 and `dmclk_port` v1.2. It restores the previous GPIO
+settings. The test does not initialize the WM8994 codec or verify audio quality.
 
 ## Build and tests
 

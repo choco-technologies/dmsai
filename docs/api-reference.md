@@ -58,7 +58,11 @@ STM32 port API entry points reside in `src/port/stm32_common/stm32_common.c`; th
 family `port.c` is reserved for lifecycle, hardware descriptors and IRQ
 routing. Future STM32 families can share the common source. The STM32F7 port
 uses `dmclk_port` v1.2 to reserve SAI clocks, configures master block A and
-optional synchronous RX block B, and polls their FIFOs for direct transfers.
+optional synchronous RX block B, and uses `dmdma` circular transfers with
+uncached ping-pong buffers. SAI2 uses DMA2 stream 4/channel 3 for TX and
+stream 6/channel 3 for RX. Software queues decouple callers from DMA timing.
+SAI1 currently returns `-ENOTSUP` because its DMA channel zero conflicts
+with the published `DMDMA_REQUEST_NONE` value.
 It accepts frames of at most 256 bits. If a block cannot complete a stop at a
 frame boundary, the port resets and reconfigures that controller and records a
 transfer error.
