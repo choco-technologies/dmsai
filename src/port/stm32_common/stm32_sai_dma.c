@@ -2,7 +2,9 @@
 #include "dmdma_lease.h"
 #include "dmheap.h"
 #include "dmod.h"
+#include "dmosi.h"
 #include <errno.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <string.h>
 
@@ -19,6 +21,8 @@ struct stm32_sai_dma {
     dmdma_lease_t tx_lease;
     dmdma_lease_t rx_lease;
     dmheap_context_t *heap;
+    dmosi_semaphore_t tx_ready;
+    dmosi_semaphore_t rx_ready;
     uint32_t *tx_dma;
     uint32_t *rx_dma;
     uint32_t *tx_queue;
@@ -44,6 +48,8 @@ struct stm32_sai_dma {
     bool active;
     bool fault;
     bool tx_has_data;
+    bool tx_waiting;
+    bool rx_waiting;
 };
 
 /** @brief Decode one little-endian PCM sample into a DMA word. */
@@ -124,20 +130,36 @@ static void dma_event(dmdma_lease_t lease, dmdma_event_t event, void *user_ptr)
     if (event & (dmdma_event_error | dmdma_event_timeout)) {
         __atomic_store_n(&dma->fault, true, __ATOMIC_RELEASE);
         __atomic_fetch_add(&dma->status->transfer_errors, 1U, __ATOMIC_RELAXED);
+        if (__atomic_load_n(&dma->tx_waiting, __ATOMIC_ACQUIRE))
+            dmosi_semaphore_post(dma->tx_ready, 1);
+        if (__atomic_load_n(&dma->rx_waiting, __ATOMIC_ACQUIRE))
+            dmosi_semaphore_post(dma->rx_ready, 1);
         return;
     }
     if (event & dmdma_event_half_complete) {
-        if (lane->receive) collect_rx(dma, 0);
+        if (lane->receive) {
+            collect_rx(dma, 0);
+            if (__atomic_load_n(&dma->rx_waiting, __ATOMIC_ACQUIRE))
+                dmosi_semaphore_post(dma->rx_ready, 1);
+        }
         else {
             refill_tx(dma, 0);
             __atomic_fetch_add(&dma->tx_half_events, 1U, __ATOMIC_RELEASE);
+            if (__atomic_load_n(&dma->tx_waiting, __ATOMIC_ACQUIRE))
+                dmosi_semaphore_post(dma->tx_ready, 1);
         }
     }
     if (event & dmdma_event_complete) {
-        if (lane->receive) collect_rx(dma, 1);
+        if (lane->receive) {
+            collect_rx(dma, 1);
+            if (__atomic_load_n(&dma->rx_waiting, __ATOMIC_ACQUIRE))
+                dmosi_semaphore_post(dma->rx_ready, 1);
+        }
         else {
             refill_tx(dma, 1);
             __atomic_fetch_add(&dma->tx_half_events, 1U, __ATOMIC_RELEASE);
+            if (__atomic_load_n(&dma->tx_waiting, __ATOMIC_ACQUIRE))
+                dmosi_semaphore_post(dma->tx_ready, 1);
         }
     }
 }
@@ -186,6 +208,10 @@ int stm32_sai_dma_create(stm32_sai_dma_t **result,
     dma->transmit = config->transmit;
     dma->receive = config->receive;
     int rc = dma->heap ? 0 : -ENODEV;
+    if (rc == 0) dma->tx_ready = dmosi_semaphore_create(0, 1);
+    if (rc == 0 && !dma->tx_ready) rc = -ENOMEM;
+    if (rc == 0 && dma->receive) dma->rx_ready = dmosi_semaphore_create(0, 1);
+    if (rc == 0 && dma->receive && !dma->rx_ready) rc = -ENOMEM;
     if (rc == 0) dma->tx_dma = alloc_dma_buffer(dma);
     if (rc == 0 && !dma->tx_dma) rc = -ENOMEM;
     if (rc == 0 && dma->receive) dma->rx_dma = alloc_dma_buffer(dma);
@@ -214,6 +240,8 @@ void stm32_sai_dma_destroy(stm32_sai_dma_t *dma)
     if (dma->tx_dma) dmheap_free(dma->heap, dma->tx_dma, true);
     if (dma->rx_queue) Dmod_Free(dma->rx_queue);
     if (dma->tx_queue) Dmod_Free(dma->tx_queue);
+    if (dma->rx_ready) dmosi_semaphore_destroy(dma->rx_ready);
+    if (dma->tx_ready) dmosi_semaphore_destroy(dma->tx_ready);
     Dmod_Free(dma);
 }
 
@@ -250,6 +278,10 @@ int stm32_sai_dma_start(stm32_sai_dma_t *dma)
     dma->tx_head = dma->tx_tail = dma->rx_head = dma->rx_tail = 0;
     dma->tx_half_events = 0;
     dma->tx_has_data = false;
+    dma->tx_waiting = dma->rx_waiting = false;
+    while (dmosi_semaphore_wait(dma->tx_ready, 1, 0) == 0) {}
+    if (dma->rx_ready)
+        while (dmosi_semaphore_wait(dma->rx_ready, 1, 0) == 0) {}
     __atomic_store_n(&dma->fault, false, __ATOMIC_RELEASE);
     __atomic_store_n(&dma->active, true, __ATOMIC_RELEASE);
     int rc = dma->receive ? start_lane(dma, true) : 0;
@@ -263,19 +295,38 @@ void stm32_sai_dma_stop(stm32_sai_dma_t *dma)
 {
     if (!dma) return;
     __atomic_store_n(&dma->active, false, __ATOMIC_RELEASE);
+    if (__atomic_load_n(&dma->tx_waiting, __ATOMIC_ACQUIRE))
+        dmosi_semaphore_post(dma->tx_ready, 1);
+    if (__atomic_load_n(&dma->rx_waiting, __ATOMIC_ACQUIRE))
+        dmosi_semaphore_post(dma->rx_ready, 1);
     if (dma->tx_lease) dmdma_lease_abort(dma->tx_lease);
     if (dma->rx_lease) dmdma_lease_abort(dma->rx_lease);
 }
 
 /** @brief Return a transfer error or wait for one queue change. */
-static int wait_queue(stm32_sai_dma_t *dma, Dmod_Timestamp_t started,
+static int wait_queue(stm32_sai_dma_t *dma, dmosi_semaphore_t ready,
+                      bool *waiting, Dmod_Timestamp_t started,
                       uint32_t timeout_ms)
 {
     if (__atomic_load_n(&dma->fault, __ATOMIC_ACQUIRE)) return -EIO;
     if (!__atomic_load_n(&dma->active, __ATOMIC_ACQUIRE)) return -ECANCELED;
-    if (timeout_ms && Dmod_GetUptime() - started >= timeout_ms)
+    uint32_t elapsed = (uint32_t)(Dmod_GetUptime() - started);
+    if (timeout_ms && elapsed >= timeout_ms) return -ETIMEDOUT;
+    uint32_t remaining = timeout_ms ? timeout_ms - elapsed : 0;
+    int32_t delay = timeout_ms ?
+        (remaining > INT_MAX ? INT_MAX : (int32_t)remaining) : -1;
+    __atomic_store_n(waiting, true, __ATOMIC_RELEASE);
+    if (__atomic_load_n(&dma->fault, __ATOMIC_ACQUIRE) ||
+        !__atomic_load_n(&dma->active, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(waiting, false, __ATOMIC_RELEASE);
+        return __atomic_load_n(&dma->fault, __ATOMIC_ACQUIRE) ? -EIO : -ECANCELED;
+    }
+    int rc = dmosi_semaphore_wait(ready, 1, delay);
+    __atomic_store_n(waiting, false, __ATOMIC_RELEASE);
+    if (rc == -EAGAIN && timeout_ms) return -ETIMEDOUT;
+    if (rc && timeout_ms && Dmod_GetUptime() - started >= timeout_ms)
         return -ETIMEDOUT;
-    Dmod_ThreadSleep(1);
+    if (rc && rc != -ETIMEDOUT) return rc;
     return 0;
 }
 
@@ -304,7 +355,8 @@ int stm32_sai_dma_write(stm32_sai_dma_t *dma, const void *buffer,
                              __ATOMIC_RELEASE);
             __atomic_store_n(&dma->tx_has_data, true, __ATOMIC_RELEASE);
             *written += frame_bytes;
-        } else if ((rc = wait_queue(dma, started, timeout_ms)) != 0) break;
+        } else if ((rc = wait_queue(dma, dma->tx_ready, &dma->tx_waiting,
+                                    started, timeout_ms)) != 0) break;
     }
     return *written ? 0 : rc;
 }
@@ -318,7 +370,8 @@ int stm32_sai_dma_flush(stm32_sai_dma_t *dma, uint32_t timeout_ms)
     uint32_t last_word = __atomic_load_n(&dma->tx_head, __ATOMIC_ACQUIRE);
     while ((int32_t)(__atomic_load_n(&dma->tx_tail, __ATOMIC_ACQUIRE) -
                      last_word) < 0) {
-        int rc = wait_queue(dma, started, timeout_ms);
+        int rc = wait_queue(dma, dma->tx_ready, &dma->tx_waiting,
+                            started, timeout_ms);
         if (rc != 0) return rc;
     }
     /* The last queued frame was placed in a completed half. Tail can become
@@ -327,7 +380,8 @@ int stm32_sai_dma_flush(stm32_sai_dma_t *dma, uint32_t timeout_ms)
     uint32_t completed = __atomic_load_n(&dma->tx_half_events, __ATOMIC_ACQUIRE);
     while ((uint32_t)(__atomic_load_n(&dma->tx_half_events, __ATOMIC_ACQUIRE) -
                       completed) < 3U) {
-        int rc = wait_queue(dma, started, timeout_ms);
+        int rc = wait_queue(dma, dma->tx_ready, &dma->tx_waiting,
+                            started, timeout_ms);
         if (rc != 0) return rc;
     }
     return 0;
@@ -357,7 +411,8 @@ int stm32_sai_dma_read(stm32_sai_dma_t *dma, void *buffer,
             __atomic_store_n(&dma->rx_tail, tail + dma->frame_words,
                              __ATOMIC_RELEASE);
             *received += frame_bytes;
-        } else if ((rc = wait_queue(dma, started, timeout_ms)) != 0) break;
+        } else if ((rc = wait_queue(dma, dma->rx_ready, &dma->rx_waiting,
+                                    started, timeout_ms)) != 0) break;
     }
     return *received ? 0 : rc;
 }

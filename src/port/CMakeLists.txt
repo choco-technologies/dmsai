@@ -16,6 +16,7 @@ target_include_directories(${DMOD_MODULE_NAME}_if INTERFACE
 )
 
 dmod_link_modules(${DMOD_MODULE_NAME}
+    dmosi
     dmclk_port@>=1.2
     dmdma@>=0.5
     dmheap
