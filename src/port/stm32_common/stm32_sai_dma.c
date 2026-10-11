@@ -2,6 +2,7 @@
 #include "dmdma_lease.h"
 #include "dmheap.h"
 #include "dmod.h"
+#include "dmosi.h"
 #include <errno.h>
 #include <stdbool.h>
 #include <string.h>
@@ -9,6 +10,8 @@
 #define DMA_HALF_FRAMES 64U
 #define DMA_QUEUE_FRAMES 256U
 #define DMA_ALIGNMENT 32U
+/* Upper bound of one wait for a queue change. A DMA interrupt ends it early. */
+#define WAIT_SLICE_MS 10
 
 typedef struct {
     struct stm32_sai_dma *owner;
@@ -19,6 +22,7 @@ struct stm32_sai_dma {
     dmdma_lease_t tx_lease;
     dmdma_lease_t rx_lease;
     dmheap_context_t *heap;
+    dmosi_semaphore_t wake;
     uint32_t *tx_dma;
     uint32_t *rx_dma;
     uint32_t *tx_queue;
@@ -124,6 +128,7 @@ static void dma_event(dmdma_lease_t lease, dmdma_event_t event, void *user_ptr)
     if (event & (dmdma_event_error | dmdma_event_timeout)) {
         __atomic_store_n(&dma->fault, true, __ATOMIC_RELEASE);
         __atomic_fetch_add(&dma->status->transfer_errors, 1U, __ATOMIC_RELAXED);
+        dmosi_semaphore_post(dma->wake, 1);
         return;
     }
     if (event & dmdma_event_half_complete) {
@@ -140,6 +145,7 @@ static void dma_event(dmdma_lease_t lease, dmdma_event_t event, void *user_ptr)
             __atomic_fetch_add(&dma->tx_half_events, 1U, __ATOMIC_RELEASE);
         }
     }
+    dmosi_semaphore_post(dma->wake, 1);
 }
 
 /** @brief Allocate a circular buffer from the firmware's uncached DMA heap. */
@@ -186,6 +192,8 @@ int stm32_sai_dma_create(stm32_sai_dma_t **result,
     dma->transmit = config->transmit;
     dma->receive = config->receive;
     int rc = dma->heap ? 0 : -ENODEV;
+    if (rc == 0) dma->wake = dmosi_semaphore_create(0, 1);
+    if (rc == 0 && !dma->wake) rc = -ENOMEM;
     if (rc == 0) dma->tx_dma = alloc_dma_buffer(dma);
     if (rc == 0 && !dma->tx_dma) rc = -ENOMEM;
     if (rc == 0 && dma->receive) dma->rx_dma = alloc_dma_buffer(dma);
@@ -214,6 +222,7 @@ void stm32_sai_dma_destroy(stm32_sai_dma_t *dma)
     if (dma->tx_dma) dmheap_free(dma->heap, dma->tx_dma, true);
     if (dma->rx_queue) Dmod_Free(dma->rx_queue);
     if (dma->tx_queue) Dmod_Free(dma->tx_queue);
+    if (dma->wake) dmosi_semaphore_destroy(dma->wake);
     Dmod_Free(dma);
 }
 
@@ -265,9 +274,19 @@ void stm32_sai_dma_stop(stm32_sai_dma_t *dma)
     __atomic_store_n(&dma->active, false, __ATOMIC_RELEASE);
     if (dma->tx_lease) dmdma_lease_abort(dma->tx_lease);
     if (dma->rx_lease) dmdma_lease_abort(dma->rx_lease);
+    if (dma->wake) {
+        /* DMA is stopped: no ISR posts any more. Take a pending wake first so
+         * this post cannot overflow the binary semaphore. */
+        dmosi_semaphore_wait(dma->wake, 1, 0);
+        dmosi_semaphore_post(dma->wake, 1);
+    }
 }
 
-/** @brief Return a transfer error or wait for one queue change. */
+/** @brief Return a transfer error or wait for one queue change.
+ *
+ * The DMA interrupt posts the semaphore after every half buffer, so the caller
+ * wakes as soon as queue space or data appears. A tick-based sleep is not
+ * enough: with a 10 ms RTOS tick it outlasts the whole TX queue. */
 static int wait_queue(stm32_sai_dma_t *dma, Dmod_Timestamp_t started,
                       uint32_t timeout_ms)
 {
@@ -275,7 +294,9 @@ static int wait_queue(stm32_sai_dma_t *dma, Dmod_Timestamp_t started,
     if (!__atomic_load_n(&dma->active, __ATOMIC_ACQUIRE)) return -ECANCELED;
     if (timeout_ms && Dmod_GetUptime() - started >= timeout_ms)
         return -ETIMEDOUT;
-    Dmod_ThreadSleep(1);
+    /* Not shortened to the remaining timeout: below one tick dmosi would
+     * poll instead of block. */
+    dmosi_semaphore_wait(dma->wake, 1, WAIT_SLICE_MS);
     return 0;
 }
 
