@@ -7,7 +7,7 @@
 DIF used by `dmdevfs`, following the same device model as `dmeth`: an INI
 section selects the driver and each configured controller appears as
 `/dev/dmsaiN`. Applications use ordinary file read/write operations and
-driver-specific `ioctl` commands. There is no separate stream Module API.
+the standard dmdrvi audio stream `ioctl` commands. There is no separate stream Module API.
 
 `dmdevfs` owns device node creation and mounting. `dmsai` parses the
 selected INI section, reserves the controller through `dmsai_port`, and
@@ -32,17 +32,25 @@ resources and transfer mechanism.
 An open device has one exclusive handle, so two clients cannot independently
 start, stop or change the same stream.
 
-The device-specific commands in `dmsai_ioctl.h` are:
+The node implements the standard audio stream commands from `dmdrvi_ioctl.h`
+(dmdrvi 2.7, `DMDRVI_IOCTL_AUDIO_*`) - the same contract a codec node such as
+dmwm8994 implements - so a client plays the same way on both and needs no
+dmsai header:
 
 | Command | Argument | Purpose |
 |---|---|---|
-| `DMSAI_IOCTL_GET_CONFIG` | `dmsai_config_t *` | Read effective configuration |
-| `DMSAI_IOCTL_START` | `NULL` | Start configured directions |
-| `DMSAI_IOCTL_STOP` | `NULL` | Stop transfer and wake pending I/O |
-| `DMSAI_IOCTL_GET_STATUS` | `dmsai_status_t *` | Read rate and error counters |
-| `DMSAI_IOCTL_SET_IO_TIMEOUT` | `const uint32_t *` | Set this handle's wait limit in ms; zero means no limit |
-| `DMSAI_IOCTL_GET_IO_TIMEOUT` | `uint32_t *` | Read this handle's wait limit |
-| `DMSAI_IOCTL_DRAIN` | `NULL` | Wait until queued TX data reaches the output |
+| `DMDRVI_IOCTL_AUDIO_GET_STREAM` | `dmdrvi_audio_stream_t *` | Read buffer layout (rate, format, channels = active slots) and link |
+| `DMDRVI_IOCTL_AUDIO_CONFIGURE` | `const dmdrvi_audio_config_t *` | Succeeds only when rate, channels and width match the ini format |
+| `DMDRVI_IOCTL_AUDIO_START` | `NULL` | Start configured directions; succeeds when already running |
+| `DMDRVI_IOCTL_AUDIO_STOP` | `NULL` | Stop transfer and wake pending I/O |
+| `DMDRVI_IOCTL_AUDIO_GET_STATUS` | `dmdrvi_audio_status_t *` | Read rate and error counters |
+| `DMDRVI_IOCTL_AUDIO_SET_TIMEOUT` | `const uint32_t *` | Set this handle's wait limit in ms; zero means no limit |
+| `DMDRVI_IOCTL_AUDIO_GET_TIMEOUT` | `uint32_t *` | Read this handle's wait limit |
+| `DMDRVI_IOCTL_AUDIO_DRAIN` | `NULL` | Wait until queued TX data reaches the output |
+
+The SAI has no analog stage: `AUDIO_GET_INFO`, `AUDIO_SET_VOLUME` and
+`AUDIO_SET_MUTE` return `-ENOTSUP`. That also keeps dmdevfs from reporting
+the node as an `audio` device - the codec in front of it is the one.
 
 ## Configuration example
 
@@ -81,7 +89,7 @@ This sequence sends PCM and waits for it to leave the DMA output before STOP.
 ```c
 #include "dmod.h"
 #include "dmsai.h"
-#include "dmsai_ioctl.h"
+#include "dmdrvi_ioctl.h"
 
 int play_stereo(const int16_t *pcm, size_t frames)
 {
@@ -89,15 +97,15 @@ int play_stereo(const int16_t *pcm, size_t frames)
     if (audio == NULL)
         return -1;
 
-    int result = Dmod_Ioctl(audio, DMSAI_IOCTL_START, NULL);
+    int result = Dmod_Ioctl(audio, DMDRVI_IOCTL_AUDIO_START, NULL);
     if (result == 0)
     {
         size_t bytes = frames * 2u * sizeof(int16_t);
         if (Dmod_FileWrite(pcm, 1, bytes, audio) != bytes)
             result = -1;
         if (result == 0)
-            result = Dmod_Ioctl(audio, DMSAI_IOCTL_DRAIN, NULL);
-        Dmod_Ioctl(audio, DMSAI_IOCTL_STOP, NULL);
+            result = Dmod_Ioctl(audio, DMDRVI_IOCTL_AUDIO_DRAIN, NULL);
+        Dmod_Ioctl(audio, DMDRVI_IOCTL_AUDIO_STOP, NULL);
     }
     Dmod_FileClose(audio);
     return result;
@@ -168,7 +176,7 @@ uncached `dmheap` DMA heap. DMA half/full callbacks move whole PCM frames
 between those buffers and bounded software queues; empty TX periods produce
 silence, while RX queue overflow increments `rx_overruns`. This keeps DMA
 memory valid across caller scheduling gaps. A successful `write` means the
-port accepted bytes into its queue; `DMSAI_IOCTL_DRAIN` waits until the
+port accepted bytes into its queue; `DMDRVI_IOCTL_AUDIO_DRAIN` waits until the
 queued audio has reached the output before STOP. The port does not configure
 board pins or the audio codec.
 
