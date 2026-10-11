@@ -7,8 +7,12 @@
 #include <stdbool.h>
 #include <string.h>
 
-#define DMA_HALF_FRAMES 64U
-#define DMA_QUEUE_FRAMES 256U
+/* A half of the DMA buffer is an interrupt (128 frames: 2.7 ms at 48 kHz) and
+ * the queue holds a writer's period with room to spare (1024: 21 ms) - fewer,
+ * larger wakeups; the DMA buffer comes from the small `dma` heap, the queue
+ * from the ordinary one. */
+#define DMA_HALF_FRAMES 128U
+#define DMA_QUEUE_FRAMES 1024U
 #define DMA_ALIGNMENT 32U
 /* Upper bound of one wait for a queue change. A DMA interrupt ends it early. */
 #define WAIT_SLICE_MS 10
@@ -74,26 +78,30 @@ static void to_pcm(uint8_t *destination, uint8_t width, uint32_t sample,
 static void refill_tx(struct stm32_sai_dma *dma, unsigned half)
 {
     uint32_t *destination = dma->tx_dma + half * dma->half_words;
-    bool underrun = false;
-    for (uint32_t i = 0; i < DMA_HALF_FRAMES; ++i) {
-        uint32_t tail = dma->tx_tail;
-        uint32_t head = __atomic_load_n(&dma->tx_head, __ATOMIC_ACQUIRE);
-        uint32_t *frame = destination + i * dma->frame_words;
-        if (dma->transmit && head - tail >= dma->frame_words) {
-            uint32_t start = tail % dma->queue_words;
-            memcpy(frame, dma->tx_queue + start,
-                   dma->frame_words * sizeof(uint32_t));
-            __atomic_store_n(&dma->tx_tail, tail + dma->frame_words,
-                             __ATOMIC_RELEASE);
-        } else {
-            memset(frame, 0, dma->frame_words * sizeof(uint32_t));
-            if (dma->transmit &&
-                __atomic_load_n(&dma->tx_has_data, __ATOMIC_ACQUIRE))
-                underrun = true;
-        }
+    uint32_t tail = dma->tx_tail;
+    uint32_t queued = dma->transmit
+        ? __atomic_load_n(&dma->tx_head, __ATOMIC_ACQUIRE) - tail : 0U;
+    uint32_t words = queued - queued % dma->frame_words;   /* Whole frames */
+    if (words > dma->half_words) words = dma->half_words;
+    if (words) {
+        /* One or two runs of the queue (it wraps), then the tail at once */
+        uint32_t start = tail % dma->queue_words;
+        uint32_t first = dma->queue_words - start;
+        if (first > words) first = words;
+        memcpy(destination, dma->tx_queue + start, first * sizeof(uint32_t));
+        if (words > first)
+            memcpy(destination + first, dma->tx_queue,
+                   (words - first) * sizeof(uint32_t));
+        __atomic_store_n(&dma->tx_tail, tail + words, __ATOMIC_RELEASE);
     }
-    if (underrun)
-        __atomic_fetch_add(&dma->status->tx_underruns, 1U, __ATOMIC_RELAXED);
+    if (words < dma->half_words) {
+        memset(destination + words, 0,
+               (dma->half_words - words) * sizeof(uint32_t));
+        if (dma->transmit &&
+            __atomic_load_n(&dma->tx_has_data, __ATOMIC_ACQUIRE))
+            __atomic_fetch_add(&dma->status->tx_underruns, 1U,
+                               __ATOMIC_RELAXED);
+    }
 }
 
 /** @brief Move a completed RX half into the software queue in whole frames. */
@@ -313,19 +321,28 @@ int stm32_sai_dma_write(stm32_sai_dma_t *dma, const void *buffer,
         if (!__atomic_load_n(&dma->active, __ATOMIC_ACQUIRE)) {
             rc = -ECANCELED; break;
         }
+        uint32_t frames = (uint32_t)((size - *written) / frame_bytes);
+        if (!frames) break;                         /* (a part of a frame) */
         uint32_t head = dma->tx_head;
         uint32_t tail = __atomic_load_n(&dma->tx_tail, __ATOMIC_ACQUIRE);
-        if (head - tail + dma->frame_words <= dma->queue_words) {
-            uint32_t start = head % dma->queue_words;
-            const uint8_t *pcm = (const uint8_t *)buffer + *written;
-            for (uint8_t i = 0; i < dma->frame_words; ++i)
-                dma->tx_queue[start + i] = from_pcm(pcm + i * dma->sample_bytes,
-                    dma->sample_bytes, dma->format);
-            __atomic_store_n(&dma->tx_head, head + dma->frame_words,
-                             __ATOMIC_RELEASE);
-            __atomic_store_n(&dma->tx_has_data, true, __ATOMIC_RELEASE);
-            *written += frame_bytes;
-        } else if ((rc = wait_queue(dma, started, timeout_ms)) != 0) break;
+        uint32_t room = (dma->queue_words - (head - tail)) / dma->frame_words;
+        if (!room) {
+            if ((rc = wait_queue(dma, started, timeout_ms)) != 0) break;
+            continue;
+        }
+        if (frames > room) frames = room;
+        /* As many frames as there is room for, the head moved once */
+        uint32_t words = frames * dma->frame_words;
+        uint32_t at = head % dma->queue_words;
+        const uint8_t *pcm = (const uint8_t *)buffer + *written;
+        for (uint32_t i = 0; i < words; ++i) {
+            dma->tx_queue[at] = from_pcm(pcm, dma->sample_bytes, dma->format);
+            pcm += dma->sample_bytes;
+            if (++at == dma->queue_words) at = 0;
+        }
+        __atomic_store_n(&dma->tx_head, head + words, __ATOMIC_RELEASE);
+        __atomic_store_n(&dma->tx_has_data, true, __ATOMIC_RELEASE);
+        *written += frames * frame_bytes;
     }
     return *written ? 0 : rc;
 }
