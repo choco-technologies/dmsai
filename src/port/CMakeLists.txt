@@ -19,4 +19,5 @@ dmod_link_modules(${DMOD_MODULE_NAME}
     dmclk_port@>=1.2
     dmdma@>=0.5
     dmheap
+    dmosi
 )
