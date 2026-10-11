@@ -79,7 +79,7 @@ target_include_directories(${DMOD_MODULE_NAME}_if INTERFACE
 # To depend on another module's headers, use:
 dmod_link_modules(${DMOD_MODULE_NAME}
     dmini
-    dmdrvi
+    dmdrvi@>=2.7
 )
 
 add_subdirectory(src/port)

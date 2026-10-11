@@ -52,7 +52,7 @@ typedef struct
     bool receive;                   /**< Enable read access to the RX direction. */
 } dmsai_config_t;
 
-/** @brief Status returned by DMSAI_IOCTL_GET_STATUS. */
+/** @brief Port status; the node reports it as dmdrvi_audio_status_t (DMDRVI_IOCTL_AUDIO_GET_STATUS). */
 typedef struct
 {
     uint32_t actual_sample_rate_hz; /**< Frame rate achieved by the port. */

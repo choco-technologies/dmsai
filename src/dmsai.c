@@ -2,12 +2,21 @@
 #include "dmod.h"
 #include "dmsai_private.h"
 #include "dmsai_port.h"
-#include "dmsai_ioctl.h"
+#include "dmdrvi_ioctl.h"
 #include <errno.h>
 #include <limits.h>
 #include <string.h>
 
 static uint32_t active_contexts;
+
+/* The node reports dmsai_config_t through the dmdrvi audio types by value. */
+_Static_assert((int)dmsai_pcm_s16_le == DMDRVI_AUDIO_FORMAT_S16_LE &&
+               (int)dmsai_pcm_s24_in32_le == DMDRVI_AUDIO_FORMAT_S24_IN32_LE &&
+               (int)dmsai_pcm_s32_le == DMDRVI_AUDIO_FORMAT_S32_LE,
+               "dmsai PCM formats must match dmdrvi_audio_format_t");
+_Static_assert((int)dmsai_clock_master == DMDRVI_AUDIO_CLOCK_MASTER &&
+               (int)dmsai_clock_slave == DMDRVI_AUDIO_CLOCK_SLAVE,
+               "dmsai clock roles must match dmdrvi_audio_clock_role_t");
 
 /**
  * @brief Initialize the architecture-independent driver module.
@@ -207,11 +216,68 @@ dmod_dmdrvi_dif_api_declaration(2.0, dmsai, dmdrvi_ssize_t, _write,
     return written ? (dmdrvi_ssize_t)written : rc;
 }
 
+/** @brief Describe the node's buffers and link in the standard dmdrvi audio terms. */
+static void get_stream(dmdrvi_context_t context, dmdrvi_audio_stream_t *out)
+{
+    const dmsai_config_t *c = &context->config;
+    out->sample_rate_hz = c->sample_rate_hz;
+    out->format = (dmdrvi_audio_format_t)c->pcm_format;
+    out->channels = (uint8_t)__builtin_popcount(c->active_slots);
+    out->transmit = c->transmit;
+    out->receive = c->receive;
+    out->framing = c->framing == dmsai_frame_tdm ? DMDRVI_AUDIO_FRAMING_TDM
+                                                 : DMDRVI_AUDIO_FRAMING_I2S;
+    out->clock_role = (dmdrvi_audio_clock_role_t)c->clock_role;
+    out->slot_bits = c->slot_bits;
+    out->slot_count = c->slot_count;
+    out->frame_bits = c->frame_bits;
+    out->active_slots = c->active_slots;
+}
+
+/** @brief Read the port status as the standard dmdrvi audio status. */
+static int get_status(dmdrvi_context_t context, dmdrvi_audio_status_t *out)
+{
+    dmsai_status_t status;
+    int rc = dmsai_port_get_status(context->config.instance, &status);
+    if (rc != 0) return rc;
+    out->actual_sample_rate_hz = status.actual_sample_rate_hz;
+    out->tx_underruns = status.tx_underruns;
+    out->rx_overruns = status.rx_overruns;
+    out->transfer_errors = status.transfer_errors;
+    out->running = status.running;
+    return 0;
+}
+
+/** @brief Accept AUDIO_CONFIGURE only for the node's fixed (ini) format. */
+static int check_format(dmdrvi_context_t context, const dmdrvi_audio_config_t *req)
+{
+    const dmsai_config_t *c = &context->config;
+    uint8_t bits = c->pcm_format == dmsai_pcm_s16_le ? 16U :
+                   c->pcm_format == dmsai_pcm_s24_in32_le ? 24U : 32U;
+    if (!req) return -EINVAL;
+    return req->sample_rate_hz == c->sample_rate_hz &&
+           req->channels == __builtin_popcount(c->active_slots) &&
+           req->sample_bits == bits ? 0 : -ENOTSUP;
+}
+
+/** @brief Start the port; a running stream is not an error. */
+static int start_stream(dmdrvi_context_t context)
+{
+    dmsai_status_t status;
+    int rc = dmsai_port_get_status(context->config.instance, &status);
+    if (rc != 0) return rc;
+    return status.running ? 0 : dmsai_port_start(context->config.instance);
+}
+
 /**
- * @brief Handle stream state, configuration, status and timeout commands.
+ * @brief Handle the standard dmdrvi audio stream commands.
+ *
+ * A bare SAI has no analog stage: GET_INFO, SET_VOLUME and SET_MUTE return
+ * -ENOTSUP (so dmdevfs does not report it as an "audio" device), and
+ * CONFIGURE only confirms the fixed format.
  * @param context Driver context.
  * @param handle Open device handle.
- * @param command DMSAI_IOCTL_* command number.
+ * @param command DMDRVI_IOCTL_AUDIO_* command number.
  * @param arg Command-specific input or output pointer.
  * @return 0 or negative errno; -ENOTTY for unknown commands.
  */
@@ -221,30 +287,32 @@ dmod_dmdrvi_dif_api_declaration(2.0, dmsai, int, _ioctl,
     if (!dmsai_handle_valid(context, handle)) return -EBADF;
     dmsai_handle_t *open = handle;
     switch (command) {
-    case DMSAI_IOCTL_GET_CONFIG:
+    case DMDRVI_IOCTL_AUDIO_GET_STREAM:
         if (!arg) return -EINVAL;
-        *(dmsai_config_t *)arg = context->config;
+        get_stream(context, arg);
         return 0;
-    case DMSAI_IOCTL_GET_STATUS:
-        return arg ? dmsai_port_get_status(context->config.instance, arg) : -EINVAL;
-    case DMSAI_IOCTL_GET_IO_TIMEOUT:
+    case DMDRVI_IOCTL_AUDIO_GET_STATUS:
+        return arg ? get_status(context, arg) : -EINVAL;
+    case DMDRVI_IOCTL_AUDIO_GET_TIMEOUT:
         if (!arg) return -EINVAL;
         *(uint32_t *)arg = open->timeout_ms;
         return 0;
-    case DMSAI_IOCTL_SET_IO_TIMEOUT:
+    case DMDRVI_IOCTL_AUDIO_SET_TIMEOUT:
         if (!arg) return -EINVAL;
         open->timeout_ms = *(const uint32_t *)arg;
         return 0;
-    case DMSAI_IOCTL_START: {
-        dmsai_status_t status;
-        int rc = dmsai_port_get_status(context->config.instance, &status);
-        if (rc != 0) return rc;
-        return status.running ? -EBUSY : dmsai_port_start(context->config.instance);
-    }
-    case DMSAI_IOCTL_STOP:
+    case DMDRVI_IOCTL_AUDIO_CONFIGURE:
+        return check_format(context, arg);
+    case DMDRVI_IOCTL_AUDIO_START:
+        return start_stream(context);
+    case DMDRVI_IOCTL_AUDIO_STOP:
         return dmsai_port_stop(context->config.instance);
-    case DMSAI_IOCTL_DRAIN:
+    case DMDRVI_IOCTL_AUDIO_DRAIN:
         return drain_tx(context, open);
+    case DMDRVI_IOCTL_AUDIO_GET_INFO:
+    case DMDRVI_IOCTL_AUDIO_SET_VOLUME:
+    case DMDRVI_IOCTL_AUDIO_SET_MUTE:
+        return -ENOTSUP;
     default:
         return -ENOTTY;
     }

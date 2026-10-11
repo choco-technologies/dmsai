@@ -33,15 +33,20 @@ for a stream; negative offsets are rejected and non-negative offsets are
 ignored. A zero-length request returns zero. Read/write access
 requires the corresponding direction to be enabled and a successful START.
 
-`DMSAI_IOCTL_START` and `DMSAI_IOCTL_STOP` control the stream. GET_CONFIG and
-GET_STATUS return the effective configuration and current counters. Timeout
-commands set or get a per-open-handle millisecond bound for blocking I/O;
-zero means wait indefinitely. All commands occupy the driver-specific range
-beginning at `DMDRVI_IOCTL_CUSTOM_BASE`. Unknown commands return
-`-ENOTTY`. The precise argument types are documented in `dmsai_ioctl.h`.
+The node implements the standard dmdrvi audio stream commands
+(`dmdrvi_ioctl.h`, dmdrvi 2.7), the same contract a codec node implements.
+`DMDRVI_IOCTL_AUDIO_START` and `DMDRVI_IOCTL_AUDIO_STOP` control the stream;
+START succeeds when the stream already runs. `AUDIO_GET_STREAM` and
+`AUDIO_GET_STATUS` return the buffer layout and link
+(`dmdrvi_audio_stream_t`, channels = active slots) and the current counters
+(`dmdrvi_audio_status_t`). `AUDIO_SET_TIMEOUT` / `AUDIO_GET_TIMEOUT` set or
+get a per-open-handle millisecond bound for blocking I/O; zero means wait
+indefinitely. `AUDIO_CONFIGURE` returns 0 only when rate, channels and width
+match the ini format, else `-ENOTSUP`; `AUDIO_GET_INFO`, `AUDIO_SET_VOLUME`
+and `AUDIO_SET_MUTE` return `-ENOTSUP`. Unknown commands return `-ENOTTY`.
 Opening a node is exclusive; a second open fails until the first handle closes.
 
-`dmdrvi_flush` and `DMSAI_IOCTL_DRAIN` wait for queued TX samples to
+`dmdrvi_flush` and `DMDRVI_IOCTL_AUDIO_DRAIN` wait for queued TX samples to
 reach the output. They share the handle timeout. `stat` reports a zero-length
 stream with permissions determined by configured directions. Closing an open
 handle stops the stream and allows another exclusive open.

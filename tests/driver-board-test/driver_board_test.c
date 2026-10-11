@@ -1,5 +1,5 @@
 #include "dmod.h"
-#include "dmsai_ioctl.h"
+#include "dmdrvi_ioctl.h"
 #include <errno.h>
 #include <stdint.h>
 
@@ -12,39 +12,48 @@ static uint8_t rx[TEST_FRAME_BYTES];
 /** @brief Exercise the public file and ioctl path through dmdevfs. */
 static int exercise_device(void *file, const char *path)
 {
-    dmsai_config_t config;
-    dmsai_status_t status;
+    dmdrvi_audio_stream_t config;
+    dmdrvi_audio_status_t status;
     uint32_t timeout = 0;
-    if (Dmod_Ioctl(file, DMSAI_IOCTL_GET_CONFIG, &config) != 0 ||
-        Dmod_Ioctl(file, DMSAI_IOCTL_GET_STATUS, &status) != 0 ||
+    if (Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_GET_STREAM, &config) != 0 ||
+        Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_GET_STATUS, &status) != 0 ||
         status.running || !config.transmit || !config.receive ||
-        config.pcm_format != dmsai_pcm_s16_le ||
-        __builtin_popcount(config.active_slots) != 2)
+        config.format != DMDRVI_AUDIO_FORMAT_S16_LE ||
+        config.channels != 2)
         return -1;
-    if (Dmod_Ioctl(file, DMSAI_IOCTL_GET_IO_TIMEOUT, &timeout) != 0 || timeout)
+    if (Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_GET_TIMEOUT, &timeout) != 0 || timeout)
         return -2;
-    if (Dmod_Ioctl(file, DMSAI_IOCTL_GET_CONFIG, NULL) != -EINVAL ||
-        Dmod_Ioctl(file, DMSAI_IOCTL_DRAIN + 1, NULL) != -ENOTTY)
+    if (Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_GET_STREAM, NULL) != -EINVAL ||
+        Dmod_Ioctl(file, DMDRVI_IOCTL_CUSTOM_BASE, NULL) != -ENOTTY)
         return -12;
     timeout = 500U;
-    if (Dmod_Ioctl(file, DMSAI_IOCTL_SET_IO_TIMEOUT, &timeout) != 0 ||
-        Dmod_Ioctl(file, DMSAI_IOCTL_GET_IO_TIMEOUT, &timeout) != 0 ||
+    if (Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_SET_TIMEOUT, &timeout) != 0 ||
+        Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_GET_TIMEOUT, &timeout) != 0 ||
         timeout != 500U) return -3;
     void *second = Dmod_FileOpen(path, "r+");
     if (second) { Dmod_FileClose(second); return -4; }
-    if (Dmod_Ioctl(file, DMSAI_IOCTL_START, NULL) != 0 ||
-        Dmod_Ioctl(file, DMSAI_IOCTL_START, NULL) != -EBUSY) return -5;
+    dmdrvi_audio_config_t format = { .sample_rate_hz = config.sample_rate_hz,
+                                     .channels = config.channels, .sample_bits = 16 };
+    uint8_t volume = 50;
+    if (Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_CONFIGURE, &format) != 0 ||
+        Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_SET_VOLUME, &volume) != -ENOTSUP)
+        return -14;
+    format.sample_rate_hz += 1U;
+    if (Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_CONFIGURE, &format) != -ENOTSUP)
+        return -15;
+    if (Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_START, NULL) != 0 ||
+        Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_START, NULL) != 0) return -5;
     for (unsigned i = 0; i < sizeof(tx); ++i) tx[i] = (uint8_t)i;
     if (Dmod_FileWrite(tx, 1, sizeof(tx), file) != sizeof(tx)) return -6;
-    if (Dmod_Ioctl(file, DMSAI_IOCTL_DRAIN, NULL) != 0) return -7;
+    if (Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_DRAIN, NULL) != 0) return -7;
     if (Dmod_FileRead(rx, 1, sizeof(rx), file) != sizeof(rx)) return -8;
-    if (Dmod_Ioctl(file, DMSAI_IOCTL_GET_STATUS, &status) != 0 ||
+    if (Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_GET_STATUS, &status) != 0 ||
         !status.running || status.transfer_errors) return -9;
-    if (Dmod_Ioctl(file, DMSAI_IOCTL_STOP, NULL) != 0 ||
-        Dmod_Ioctl(file, DMSAI_IOCTL_STOP, NULL) != 0 ||
-        Dmod_Ioctl(file, DMSAI_IOCTL_GET_STATUS, &status) != 0 ||
+    if (Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_STOP, NULL) != 0 ||
+        Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_STOP, NULL) != 0 ||
+        Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_GET_STATUS, &status) != 0 ||
         status.running) return -10;
-    if (Dmod_Ioctl(file, DMSAI_IOCTL_DRAIN, NULL) != -EPIPE)
+    if (Dmod_Ioctl(file, DMDRVI_IOCTL_AUDIO_DRAIN, NULL) != -EPIPE)
         return -13;
     return 0;
 }
