@@ -9,6 +9,8 @@ loading both would try to create two nodes for the same SAI instance.
 |---|---|---|
 | `board/stm32f746g-disco/sai2.ini` | SAI2, index 1 | [ST 32F746G BSP audio header](https://github.com/STMicroelectronics/32f746gdiscovery-bsp/blob/main/stm32746g_discovery_audio.h) |
 | `board/stm32f769i-discovery/sai1.ini` | SAI1, index 0 | [ST STM32F769I BSP audio header](https://github.com/STMicroelectronics/32f769idiscovery-bsp/blob/main/stm32f769i_discovery_audio.h) |
+| `board/esp32s3-lcd28/i2s.ini` | I2S0 (PCM5101), TX | Waveshare demo code: DOUT 47, BCLK 48, LRC 38 |
+| `board/esp32s3-lcd28/i2s-loopback.ini` | I2S0, TX and RX on one data pad | same pins; `saitone ... loop` |
 | `mcu/stm32f746ng.ini` | SAI2, index 1 | No pins; generic stereo configuration |
 | `mcu/stm32f769ni.ini` | SAI1, index 0 | No pins; generic stereo configuration |
 
