@@ -11,6 +11,7 @@ loading both would try to create two nodes for the same SAI instance.
 | `board/stm32f769i-discovery/sai1.ini` | SAI1, index 0 | [ST STM32F769I BSP audio header](https://github.com/STMicroelectronics/32f769idiscovery-bsp/blob/main/stm32f769i_discovery_audio.h) |
 | `board/esp32s3-lcd28/i2s.ini` | I2S0 (PCM5101), TX | Waveshare demo code: DOUT 47, BCLK 48, LRC 38 |
 | `board/esp32s3-lcd28/i2s-loopback.ini` | I2S0, TX and RX on one data pad | same pins; `saitone ... loop` |
+| `board/t-deck-pro/i2s.ini` | I2S0 (PCM5102A), TX; powers the DAC (GPIO41) | T-HeadJack schematic: DIN 8, BCK 7, LRCK 9 |
 | `mcu/stm32f746ng.ini` | SAI2, index 1 | No pins; generic stereo configuration |
 | `mcu/stm32f769ni.ini` | SAI1, index 0 | No pins; generic stereo configuration |
 
