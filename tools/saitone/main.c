@@ -116,6 +116,14 @@ int main(int argc, char **argv)
             if (loop && st.receive)
             {
                 size_t got = Dmod_FileRead(rx, 1, CHUNK_FRAMES * frame_bytes, file);
+                if (frames_done / CHUNK_FRAMES == 40)
+                {
+                    Dmod_Printf("saitone: %u frames received, the first 24 (L R):", (unsigned)(got / frame_bytes));
+                    for (size_t f = 0; f < 24 && f < got / frame_bytes; ++f)
+                        Dmod_Printf(" %d/%d", get_sample(rx + f * frame_bytes, st.format),
+                                    st.channels > 1 ? get_sample(rx + f * frame_bytes + sample_bytes, st.format) : 0);
+                    Dmod_Printf("\n");
+                }
                 for (size_t f = 0; f < got / frame_bytes; ++f)
                 {
                     int v = get_sample(rx + f * frame_bytes, st.format);

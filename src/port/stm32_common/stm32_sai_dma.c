@@ -11,7 +11,7 @@
  * the queue holds a writer's period with room to spare (1024: 21 ms) - fewer,
  * larger wakeups; the DMA buffer comes from the small `dma` heap, the queue
  * from the ordinary one. */
-#define DMA_HALF_FRAMES 128U
+#define DMA_HALF_FRAMES_DEFAULT 128U
 #define DMA_QUEUE_FRAMES 1024U
 #define DMA_ALIGNMENT 32U
 /* Upper bound of one wait for a queue change. A DMA interrupt ends it early. */
@@ -48,6 +48,7 @@ struct stm32_sai_dma {
     uint8_t frame_words;
     uint8_t sample_bytes;
     uint8_t shift;                  /* left shift of a sample in its DMA word */
+    uint32_t half_frames;
     bool transmit;
     bool receive;
     bool active;
@@ -110,7 +111,7 @@ static void collect_rx(struct stm32_sai_dma *dma, unsigned half)
 {
     const uint32_t *source = dma->rx_dma + half * dma->half_words;
     bool overrun = false;
-    for (uint32_t i = 0; i < DMA_HALF_FRAMES; ++i) {
+    for (uint32_t i = 0; i < dma->half_frames; ++i) {
         uint32_t head = dma->rx_head;
         uint32_t tail = __atomic_load_n(&dma->rx_tail, __ATOMIC_ACQUIRE);
         if (head - tail + dma->frame_words <= dma->queue_words) {
@@ -201,7 +202,8 @@ int stm32_sai_dma_create(stm32_sai_dma_t **result,
     if (route->left_justify)
         dma->shift = config->pcm_format == dmsai_pcm_s16_le ? 16U :
                      config->pcm_format == dmsai_pcm_s24_in32_le ? 8U : 0U;
-    dma->half_words = DMA_HALF_FRAMES * dma->frame_words;
+    dma->half_frames = route->half_frames ? route->half_frames : DMA_HALF_FRAMES_DEFAULT;
+    dma->half_words = dma->half_frames * dma->frame_words;
     dma->queue_words = DMA_QUEUE_FRAMES * dma->frame_words;
     dma->transmit = config->transmit;
     dma->receive = config->receive;

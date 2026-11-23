@@ -17,6 +17,8 @@ typedef struct
     /* Samples sit in the top bits of each 32-bit DMA word (MSB-first serial
      * data of a 32-bit slot) instead of the low bits. */
     bool left_justify;
+    /* Frames in one half of the DMA ring (an interrupt per half); 0: the default of 128. A board with a small `dma` heap asks for less. */
+    uint16_t half_frames;
 } stm32_sai_dma_route_t;
 
 typedef struct stm32_sai_dma stm32_sai_dma_t;

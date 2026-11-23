@@ -20,6 +20,7 @@
  * - The samples travel by the GDMA (dmdma leases; the engine is shared with the STM32 SAI port): the buffers are in the internal RAM.
  */
 
+#define RX_HALF_FRAMES 32U   /* frames in half of a DMA buffer */
 #define SLOT_BITS               32U
 #define FRAME_BITS              (2U * SLOT_BITS)
 #define BCK_DIV                 (I2S_MCLK_MULTIPLE / FRAME_BITS)    /* MCLK / BCLK */
@@ -31,12 +32,13 @@ static const i2s_signals_t signals[ESP32S3_I2S_COUNT] = {
     { .mclk_out = 21, .tx_bck_out = 28, .tx_ws_out = 29, .tx_data_out = 30, .rx_bck_out = 31, .rx_ws_out = 32, .rx_data_in = 30 },
 };
 
-/* The GDMA streams of the controllers: from the top, dmspi takes the free ones from stream 0 */
+/* The GDMA streams of the controllers: from the top, dmspi takes the free ones from stream 0. The ring is two halves of 32 frames (512 bytes per
+ * direction): the `dma` heap of the boards is small (32 KB) and the display takes most of it. */
 static const stm32_sai_dma_route_t routes[ESP32S3_I2S_COUNT] = {
     { .controller = 0, .tx_stream = 4, .rx_stream = 3, .tx_request = GDMA_PERI_SEL_I2S(0), .rx_request = GDMA_PERI_SEL_I2S(0),
-      .left_justify = true },
+      .left_justify = true, .half_frames = RX_HALF_FRAMES },
     { .controller = 0, .tx_stream = 2, .rx_stream = 1, .tx_request = GDMA_PERI_SEL_I2S(1), .rx_request = GDMA_PERI_SEL_I2S(1),
-      .left_justify = true },
+      .left_justify = true, .half_frames = RX_HALF_FRAMES },
 };
 
 typedef struct
@@ -295,6 +297,8 @@ static int configure(unsigned instance, const dmsai_config_t *config, uint32_t *
     }
     if (config->receive)
     {
+        /* The receive DMA ends a descriptor after this many bytes (default 64): one half buffer */
+        *ireg(instance, I2S_RXEOF_NUM) = RX_HALF_FRAMES * 2U * sizeof(uint32_t);
         set_slot(instance, false, duplex);
         uint32_t rx_mclk = set_clock(instance, false, config->sample_rate_hz);
         if (!rx_mclk) return -ENOTSUP;
@@ -349,7 +353,10 @@ dmod_dmsai_port_api_declaration(1.0, int, _init, ( const dmsai_config_t *config 
             state->sample_bytes = config->pcm_format == dmsai_pcm_s16_le ? 2U : 4U;
             state->active_count = count_slots(config->active_slots);
             state->status.actual_sample_rate_hz = actual;
-            rc = stm32_sai_dma_create(&state->dma, &routes[index], 0, 0, config, &state->status);
+            /* The GDMA addresses the FIFO of the I2S by the PERI_SEL of the route and ignores the address of the peripheral side; dmdma still wants a
+             * non-null aligned one */
+            uintptr_t dr = I2S_BASE(index) + I2S_CONF_SINGLE_DATA;
+            rc = stm32_sai_dma_create(&state->dma, &routes[index], dr, dr, config, &state->status);
         }
     }
     if (rc == 0) rc = route_pins(config);

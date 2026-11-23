@@ -20,6 +20,8 @@
 #define I2S_TX_CLKM_DIV_CONF    0x3CU
 #define I2S_RX_TDM_CTRL         0x50U
 #define I2S_TX_TDM_CTRL         0x54U
+#define I2S_RXEOF_NUM           0x64U
+#define I2S_CONF_SINGLE_DATA    0x68U
 #define I2S_STATE               0x6CU
 
 /* RX_CONF / TX_CONF (the bits are the same unless noted) */
