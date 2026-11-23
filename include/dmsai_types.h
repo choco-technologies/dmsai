@@ -35,6 +35,11 @@ typedef enum
  * The core reads these values from the dmdevfs-selected INI section. The
  * selected port decides whether the combination is supported. Both read and
  * write operate on complete PCM frames made from the selected active slots.
+ *
+ * The pad fields (`bclk_pin` ... `mclk_pin`) are for chips that route the
+ * serial signals to pads through a matrix (ESP32-S3); a port with fixed pins
+ * (the STM32 SAI pins are set up by the board's GPIO configuration) ignores
+ * them.
  */
 typedef struct
 {
@@ -50,6 +55,11 @@ typedef struct
     uint32_t active_slots;          /**< Bit N selects time slot N. */
     bool transmit;                  /**< Enable write access to the TX direction. */
     bool receive;                   /**< Enable read access to the RX direction. */
+    int8_t bclk_pin;                /**< Pad of the bit clock; -1: not given. */
+    int8_t ws_pin;                  /**< Pad of the frame (word select) clock; -1: not given. */
+    int8_t dout_pin;                /**< Pad of the transmitted data; -1: not given. */
+    int8_t din_pin;                 /**< Pad of the received data; -1: not given. */
+    int8_t mclk_pin;                /**< Pad of the master clock output; -1: not given. */
 } dmsai_config_t;
 
 /** @brief Port status; the node reports it as dmdrvi_audio_status_t (DMDRVI_IOCTL_AUDIO_GET_STATUS). */

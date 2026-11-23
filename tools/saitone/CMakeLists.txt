@@ -1,0 +1,5 @@
+set(DMOD_DMR_PATH ${CMAKE_CURRENT_SOURCE_DIR}/saitone.dmr)
+set(DMOD_STACK_SIZE 4096)
+dmod_add_executable(saitone ${PROJECT_VERSION} main.c)
+dmod_link_modules(saitone dmdrvi@>=2.7)
+target_include_directories(saitone PRIVATE ${CMAKE_SOURCE_DIR}/include)

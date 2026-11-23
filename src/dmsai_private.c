@@ -60,6 +60,18 @@ static int parse_format(const char *text, dmsai_pcm_format_t *format)
     return 0;
 }
 
+/** @brief Parse an optional pad number; a missing key is -1 (not given). */
+static int parse_pin(dmini_context_t ini, const char *key, int8_t *pin)
+{
+    *pin = -1;
+    const char *text = setting(ini, key);
+    if (!text) return 0;
+    uint32_t value;
+    if (parse_u32(text, INT8_MAX, &value)) return -EINVAL;
+    *pin = (int8_t)value;
+    return 0;
+}
+
 /** @brief Decode frame geometry without narrowing oversized INI numbers. */
 static int parse_geometry(dmini_context_t ini, dmsai_config_t *config)
 {
@@ -94,6 +106,11 @@ int dmsai_parse_config(dmini_context_t ini, dmsai_config_t *config)
     if (parse_geometry(ini, config)) return -EINVAL;
     if (parse_bool(setting(ini, "transmit"), &config->transmit) ||
         parse_bool(setting(ini, "receive"), &config->receive)) return -EINVAL;
+    if (parse_pin(ini, "bclk_pin", &config->bclk_pin) ||
+        parse_pin(ini, "ws_pin", &config->ws_pin) ||
+        parse_pin(ini, "dout_pin", &config->dout_pin) ||
+        parse_pin(ini, "din_pin", &config->din_pin) ||
+        parse_pin(ini, "mclk_pin", &config->mclk_pin)) return -EINVAL;
     if (!config->sample_rate_hz || !config->slot_count || !config->active_slots ||
         (!config->transmit && !config->receive)) return -EINVAL;
     return 0;
