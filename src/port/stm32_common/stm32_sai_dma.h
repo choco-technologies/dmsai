@@ -4,7 +4,20 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "dmsai_types.h"
-#include "stm32_sai.h"
+#include <stdbool.h>
+
+/** @brief Where a controller's samples travel: the DMA controller, its streams and requests. */
+typedef struct
+{
+    uint8_t controller;
+    uint8_t tx_stream;
+    uint8_t rx_stream;
+    uint16_t tx_request;
+    uint16_t rx_request;
+    /* Samples sit in the top bits of each 32-bit DMA word (MSB-first serial
+     * data of a 32-bit slot) instead of the low bits. */
+    bool left_justify;
+} stm32_sai_dma_route_t;
 
 typedef struct stm32_sai_dma stm32_sai_dma_t;
 

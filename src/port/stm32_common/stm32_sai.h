@@ -4,15 +4,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "dmclk_port.h"
+#include "stm32_sai_dma.h"
 
-typedef struct
-{
-    uint8_t controller;
-    uint8_t tx_stream;
-    uint8_t rx_stream;
-    uint16_t tx_request;
-    uint16_t rx_request;
-} stm32_sai_dma_route_t;
 
 /* RCC and SAI addresses vary by family. Keep the register-based SAI engine
  * common; each family supplies only this small hardware descriptor. */

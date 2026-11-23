@@ -47,6 +47,7 @@ struct stm32_sai_dma {
     uint32_t tx_half_events;
     uint8_t frame_words;
     uint8_t sample_bytes;
+    uint8_t shift;                  /* left shift of a sample in its DMA word */
     bool transmit;
     bool receive;
     bool active;
@@ -194,7 +195,12 @@ int stm32_sai_dma_create(stm32_sai_dma_t **result,
     dma->status = status;
     dma->format = config->pcm_format;
     dma->frame_words = (uint8_t)__builtin_popcount(config->active_slots);
-    dma->sample_bytes = config->slot_bits / 8U;
+    /* The width of the client's samples; the slot on the wire may be wider
+     * (a 16-bit sample in a 32-bit slot). */
+    dma->sample_bytes = config->pcm_format == dmsai_pcm_s16_le ? 2U : 4U;
+    if (route->left_justify)
+        dma->shift = config->pcm_format == dmsai_pcm_s16_le ? 16U :
+                     config->pcm_format == dmsai_pcm_s24_in32_le ? 8U : 0U;
     dma->half_words = DMA_HALF_FRAMES * dma->frame_words;
     dma->queue_words = DMA_QUEUE_FRAMES * dma->frame_words;
     dma->transmit = config->transmit;
@@ -336,7 +342,8 @@ int stm32_sai_dma_write(stm32_sai_dma_t *dma, const void *buffer,
         uint32_t at = head % dma->queue_words;
         const uint8_t *pcm = (const uint8_t *)buffer + *written;
         for (uint32_t i = 0; i < words; ++i) {
-            dma->tx_queue[at] = from_pcm(pcm, dma->sample_bytes, dma->format);
+            dma->tx_queue[at] =
+                from_pcm(pcm, dma->sample_bytes, dma->format) << dma->shift;
             pcm += dma->sample_bytes;
             if (++at == dma->queue_words) at = 0;
         }
@@ -391,7 +398,8 @@ int stm32_sai_dma_read(stm32_sai_dma_t *dma, void *buffer,
             uint8_t *pcm = (uint8_t *)buffer + *received;
             for (uint8_t i = 0; i < dma->frame_words; ++i)
                 to_pcm(pcm + i * dma->sample_bytes, dma->sample_bytes,
-                    dma->rx_queue[start + i], dma->format);
+                    (uint32_t)((int32_t)dma->rx_queue[start + i] >> dma->shift),
+                    dma->format);
             __atomic_store_n(&dma->rx_tail, tail + dma->frame_words,
                              __ATOMIC_RELEASE);
             *received += frame_bytes;
